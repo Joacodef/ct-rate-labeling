@@ -1,0 +1,17 @@
+[project]
+name = "ct-rate-labeling"
+version = "0.1.0"
+description = "Generates binary classification labels from radiology reports using an LLM."
+readme = "README.md"
+requires-python = ">=3.10"
+
+dependencies = [
+    "pandas",         # For data I/O and manipulation
+    "hydra-core",     # For configuration management
+    "openai",         # For LLM API interaction
+    "tenacity",       # For robust API retry logic
+]
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"

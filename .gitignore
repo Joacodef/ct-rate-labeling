@@ -1,0 +1,14 @@
+.env
+!.env.example
+
+*code-workspace
+data/*
+
+__pycache__
+.coverage
+
+*.egg-info
+
+outputs/
+
+.vscode/
