@@ -25,29 +25,29 @@ This project uses [uv](https://github.com/astral-sh/uv) for package management.
     ```
 
 3.  **Install dependencies:**
-    This command installs the dependencies defined in `pyproject.toml`.
+    This command installs the dependencies defined in `pyproject.toml` and the package in editable mode.
     ```bash
     uv pip install -e .
     ```
 
 ## ⚙️ Configuration
 
-All runtime parameters (paths, API settings, and prompts) are managed via Hydra in `configs/config.yaml`.
+All runtime parameters are managed via [Hydra](https://hydra.cc/).
 
-1.  **Input Data**:
-    * Prepare an input CSV file containing, at minimum, a `VolumeName` column and a `report_text` column.
-    * Update `io.reports_csv` in `configs/config.yaml` to point to this file.
+### 1. Input Data & API Settings (`configs/config.yaml`)
+* **Input CSV**: Update `io.reports_csv` to point to your input file. This file must contain:
+    * `VolumeName`: The unique identifier for the scan (e.g., `train_1_a_1.nii.gz`).
+    * `report_text`: The raw radiology report.
+* **API Key**: Set your OpenAI API key as an environment variable:
+    ```bash
+    export OPENAI_API_KEY="sk-..."
+    ```
+    The config automatically reads this via `${oc.env:OPENAI_API_KEY}`.
 
-2.  **API Key**:
-    * The script requires an LLM API key (e.g., for OpenAI). Set this key as an environment variable:
-        ```bash
-        export OPENAI_API_KEY="sk-..."
-        ```
-    * The `configs/config.yaml` is pre-configured to read this variable using `${oc.env:OPENAI_API_KEY}`.
-
-3.  **Labels and Prompts**:
-    * Before running, review the `prompt.labels` list in `configs/config.yaml`. **These label names must exactly match the `training.target_labels` in the downstream `ct-rate-feature-benchmarks` project.**
-    * Adjust the `prompt.system_prompt` as needed to optimize LLM performance.
+### 2. Labels and Prompts (`configs/prompt/default.yaml`)
+* **Target Labels**: The list of abnormalities to extract is defined in `prompt.labels`.
+    * **Crucial**: These names must exactly match the `training.target_labels` in the downstream `ct-rate-feature-benchmarks` project.
+* **System Prompt**: You can modify the `system_prompt` in this file to refine the LLM's instructions (e.g., how to handle uncertainty or negation).
 
 ## ⚡ Usage
 
@@ -55,3 +55,11 @@ To run the label generation script:
 
 ```bash
 python scripts/generate_labels.py
+````
+
+You can also override configuration values directly from the command line:
+
+```bash
+python scripts/generate_labels.py io.reports_csv=data/new_reports.csv api.model=gpt-4o
+```
+

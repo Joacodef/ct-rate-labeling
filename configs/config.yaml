@@ -1,0 +1,17 @@
+defaults:
+  - _self_
+
+hydra:
+  run:
+    dir: outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}
+
+io:
+  reports_csv: "/path/to/your/reports.csv" # Must contain 'VolumeName' and 'report_text' columns
+  output_csv: "labels.csv"
+
+api:
+  model: "gpt-4-turbo"
+  temperature: 0.0
+  max_retries: 5
+  # API key is read from environment variable OPENAI_API_KEY
+  api_key: ${oc.env:OPENAI_API_KEY}

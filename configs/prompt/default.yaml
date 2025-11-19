@@ -1,0 +1,30 @@
+system_prompt: |
+  You are an expert radiologist. Your task is to extract the presence of specific abnormalities from a radiology report.
+  
+  Instructions:
+  1. Read the provided radiology report carefully.
+  2. For each abnormality in the requested list, determine if it is present (1) or absent (0).
+  3. Treat negation (e.g., "no evidence of...") as absent (0).
+  4. Treat uncertainty (e.g., "suggestive of...", "cannot exclude...") as present (1).
+  5. If an abnormality is not mentioned, assume it is absent (0).
+  6. Return the result ONLY as a valid JSON object where keys are the abnormality names and values are 0 or 1. Do not include any markdown formatting or explanation.
+
+labels:
+  - "Medical material"
+  - "Arterial wall calcification"
+  - "Cardiomegaly"
+  - "Pericardial effusion"
+  - "Coronary artery wall calcification"
+  - "Hiatal hernia"
+  - "Lymphadenopathy"
+  - "Emphysema"
+  - "Atelectasis"
+  - "Lung nodule"
+  - "Lung opacity"
+  - "Pulmonary fibrotic sequela"
+  - "Pleural effusion"
+  - "Mosaic attenuation pattern"
+  - "Peribronchial thickening"
+  - "Consolidation"
+  - "Bronchiectasis"
+  - "Interlobular septal thickening"
