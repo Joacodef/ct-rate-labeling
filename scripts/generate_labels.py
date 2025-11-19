@@ -5,6 +5,11 @@ import pandas as pd
 import hydra
 from omegaconf import DictConfig, OmegaConf
 from tqdm import tqdm
+from dotenv import load_dotenv
+from hydra.core.hydra_config import HydraConfig
+
+# Load environment variables from .env file before Hydra config is parsed
+load_dotenv()
 
 # Attempt to import from the installed package. 
 # If running locally without installation, fallback to adding src to path.
@@ -119,8 +124,12 @@ def main(cfg: DictConfig) -> None:
     # (Handle case where some rows might miss keys if logic failed badly, though client handles this)
     output_df = output_df.reindex(columns=cols, fill_value=0)
     
-    output_path = cfg.io.output_csv
-    log.info(f"Saving labels to {os.path.abspath(output_path)}")
+    # Construct output path using Hydra's runtime output directory
+    output_dir = HydraConfig.get().runtime.output_dir
+    output_filename = os.path.basename(cfg.io.output_csv)
+    output_path = os.path.join(output_dir, output_filename)
+    
+    log.info(f"Saving labels to {output_path}")
     output_df.to_csv(output_path, index=False)
     
     # 6. Log Summary Statistics

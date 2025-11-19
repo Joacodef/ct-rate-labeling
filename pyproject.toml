@@ -10,6 +10,7 @@ dependencies = [
     "hydra-core",     # For configuration management
     "openai",         # For LLM API interaction
     "tenacity",       # For robust API retry logic
+    "python-dotenv",  # For loading environment variables from .env
 ]
 
 [build-system]

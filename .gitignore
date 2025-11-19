@@ -12,3 +12,5 @@ __pycache__
 outputs/
 
 .vscode/
+
+*.csv
