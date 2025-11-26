@@ -1,7 +1,10 @@
 import argparse
+import hashlib
 import logging
 import os
 import sys
+from collections import defaultdict
+from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 import pandas as pd
@@ -13,6 +16,24 @@ from hydra.core.hydra_config import HydraConfig
 
 # Load environment variables from .env file
 load_dotenv()
+
+parser = argparse.ArgumentParser(add_help=False)
+parser.add_argument(
+    "--resume",
+    type=str,
+    default="",
+    help="Path to a previous Hydra run directory whose config/output should be reused"
+)
+parsed_args, remaining = parser.parse_known_args()
+RESUME_RUN_DIR = parsed_args.resume or ""
+if RESUME_RUN_DIR:
+    resolved_resume_dir = os.path.abspath(RESUME_RUN_DIR)
+    hydra_dir_override = f"hydra.run.dir={resolved_resume_dir}"
+    sys.argv = [sys.argv[0], hydra_dir_override] + remaining
+    os.environ["HYDRA_RUN_DIR"] = resolved_resume_dir
+    RESUME_RUN_DIR = resolved_resume_dir
+else:
+    sys.argv = [sys.argv[0]] + remaining
 
 # Boilerplate to ensure we can import from src/ even if not installed
 try:
@@ -159,6 +180,76 @@ def combine_meta(meta_batch: List[Dict[str, Any]]) -> Dict[str, Any]:
 
     return combined
 
+
+def _safe_number(value: Any, default: float = 0.0) -> float:
+    """Convert a value to float while guarding against pandas NA objects."""
+    if value is None:
+        return default
+    try:
+        if pd.isna(value):
+            return default
+    except Exception:
+        pass
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def load_resume_data(path: str) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, List[Dict[str, Any]]]]:
+    """Load an existing predictions CSV to support resuming a previous eval run."""
+    if not path or not os.path.exists(path):
+        return {}, {}
+
+    try:
+        resume_df = pd.read_csv(path)
+    except Exception as exc:
+        log.error("Failed to load resume CSV '%s': %s", path, exc)
+        return {}, {}
+
+    if "VolumeName" not in resume_df.columns:
+        log.warning("Resume CSV '%s' lacks VolumeName column; ignoring resume request.", path)
+        return {}, {}
+
+    resume_df = resume_df.convert_dtypes()
+    by_volume: Dict[str, Dict[str, Any]] = {}
+    by_hash: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+
+    for _, row in resume_df.iterrows():
+        record = row.to_dict()
+        vol = record.get("VolumeName")
+        if isinstance(vol, str) and vol:
+            by_volume[vol] = record
+        rhash = record.get("report_hash")
+        if isinstance(rhash, str) and rhash:
+            by_hash[rhash].append(record)
+
+    log.info(
+        "Loaded %d previously evaluated rows from %s for resume support.",
+        len(resume_df),
+        path
+    )
+    return by_volume, by_hash
+
+
+def remove_hash_record(
+    hash_map: Dict[str, List[Dict[str, Any]]],
+    rhash: str,
+    record: Dict[str, Any]
+) -> None:
+    """Remove a specific record from the hash bucket if present."""
+    if not rhash:
+        return
+    bucket = hash_map.get(rhash)
+    if not bucket:
+        return
+    for idx, candidate in enumerate(bucket):
+        if candidate is record:
+            bucket.pop(idx)
+            if not bucket:
+                hash_map.pop(rhash, None)
+            break
+
 @hydra.main(version_base=None, config_path="../configs", config_name="config")
 def main(cfg: DictConfig) -> None:
     """
@@ -167,7 +258,33 @@ def main(cfg: DictConfig) -> None:
       1. metrics.csv: Per-label precision, recall, and F1.
       2. discrepancies.csv: Detailed list of mismatches for analysis.
     """
-    log.info(f"Starting prompt evaluation with configuration:\n{OmegaConf.to_yaml(cfg)}")
+    resume_predictions_path = ""
+    if RESUME_RUN_DIR:
+        overrides = [ov for ov in HydraConfig.get().overrides.task if not ov.startswith("hydra.run.dir=")]
+        if overrides:
+            log.error(
+                "--resume was provided but additional Hydra overrides were detected (%s). "
+                "Please rerun without extra overrides so the original config can be reused.",
+                overrides
+            )
+            sys.exit(1)
+
+        resume_dir = Path(RESUME_RUN_DIR)
+        resume_cfg_path = resume_dir / ".hydra" / "config.yaml"
+        if not resume_cfg_path.exists():
+            log.error("Resume directory %s does not contain .hydra/config.yaml", resume_dir)
+            sys.exit(1)
+
+        cfg = OmegaConf.load(str(resume_cfg_path))
+        resume_predictions_path = str(resume_dir / "evaluation_predictions.csv")
+        log.info(
+            "Resuming evaluation with config from %s; predictions CSV set to %s",
+            resume_cfg_path,
+            resume_predictions_path
+        )
+        log.info(f"Loaded resume configuration:\n{OmegaConf.to_yaml(cfg)}")
+    else:
+        log.info(f"Starting prompt evaluation with configuration:\n{OmegaConf.to_yaml(cfg)}")
 
     # 1. Validate Input
     input_path = cfg.io.reports_csv
@@ -209,6 +326,46 @@ def main(cfg: DictConfig) -> None:
         )
         sys.exit(1)
 
+    if RESUME_RUN_DIR:
+        output_dir = RESUME_RUN_DIR
+    else:
+        output_dir = HydraConfig.get().runtime.output_dir
+
+    predictions_path = resume_predictions_path or os.path.join(output_dir, "evaluation_predictions.csv")
+
+    prediction_cols = [
+        "VolumeName",
+        "report_hash",
+        "prompt_tokens",
+        "completion_tokens",
+        "total_tokens",
+        "latency_seconds",
+        "model_version",
+        "request_id",
+        "retry_count",
+        "started_at_utc",
+        "ended_at_utc",
+        "status",
+        "error_message"
+    ] + [f"pred_{label}" for label in target_labels]
+
+    predictions_initialized = os.path.exists(predictions_path) and os.path.getsize(predictions_path) > 0
+
+    def append_prediction_row(row: Dict[str, Any]) -> None:
+        nonlocal predictions_initialized
+        df_row = pd.DataFrame([row], columns=prediction_cols)
+        df_row.to_csv(
+            predictions_path,
+            mode="a",
+            header=not predictions_initialized,
+            index=False
+        )
+        predictions_initialized = True
+
+    resume_volume_map, resume_hash_map = load_resume_data(predictions_path)
+    resumed_count = 0
+    hash_collision_skips = 0
+
     # 3. Initialize Client
     try:
         client = LLMClient(cfg)
@@ -233,20 +390,68 @@ def main(cfg: DictConfig) -> None:
     for _, row in tqdm(df.iterrows(), total=len(df), desc="Evaluating"):
         vol_name = row.get(volume_col, "Unknown")
         report_text = row.get(report_col, "")
-        
-        # Get LLM Predictions (single mode mirrors scripts/generate_labels.py behavior)
-        if prompt_mode == "single" and not (pd.isna(report_text) or str(report_text).strip() == ""):
-            per_label_meta: List[Dict[str, Any]] = []
-            aggregated_predictions: Dict[str, int] = {}
-            for label in target_labels:
-                label_resp, label_meta = client.get_labels(report_text, labels_override=[label])
-                aggregated_predictions[label] = label_resp.get(label, 0)
-                per_label_meta.append(label_meta)
-            meta = combine_meta(per_label_meta)
-            predicted_labels = aggregated_predictions
+
+        report_hash = ""
+        if not pd.isna(report_text):
+            report_hash = hashlib.sha256(str(report_text).encode("utf-8")).hexdigest()
+
+        resume_row = None
+        if resume_volume_map:
+            resume_row = resume_volume_map.pop(vol_name, None)
+            if resume_row:
+                remove_hash_record(
+                    resume_hash_map,
+                    resume_row.get("report_hash"),
+                    resume_row
+                )
+        if not resume_row and report_hash and resume_hash_map:
+            bucket = resume_hash_map.get(report_hash)
+            if bucket:
+                if len(bucket) == 1:
+                    resume_row = bucket.pop()
+                    if not bucket:
+                        resume_hash_map.pop(report_hash, None)
+                    resume_volume_map.pop(resume_row.get("VolumeName"), None)
+                else:
+                    hash_collision_skips += 1
+
+        row_was_resumed = resume_row is not None
+
+        if row_was_resumed:
+            resumed_count += 1
+            predicted_labels = {
+                label: int(_safe_number(resume_row.get(f"pred_{label}"), 0))
+                for label in target_labels
+            }
+            meta = {
+                "prompt_tokens": int(_safe_number(resume_row.get("prompt_tokens"), 0)),
+                "completion_tokens": int(_safe_number(resume_row.get("completion_tokens"), 0)),
+                "total_tokens": int(_safe_number(resume_row.get("total_tokens"), 0)),
+                "latency_seconds": float(_safe_number(resume_row.get("latency_seconds"), 0.0)),
+                "model_version": resume_row.get("model_version", cfg.api.model),
+                "request_id": resume_row.get("request_id", ""),
+                "retry_count": int(_safe_number(resume_row.get("retry_count"), 0)),
+                "started_at_utc": resume_row.get("started_at_utc", ""),
+                "ended_at_utc": resume_row.get("ended_at_utc", ""),
+                "status": resume_row.get("status", "success"),
+                "error_message": resume_row.get("error_message", "")
+            }
+            if not report_hash:
+                report_hash = resume_row.get("report_hash", "")
         else:
-            # Note: Error handling logic inside client returns zeros on failure
-            predicted_labels, meta = client.get_labels(report_text)
+            # Get LLM Predictions (single mode mirrors scripts/generate_labels.py behavior)
+            if prompt_mode == "single" and not (pd.isna(report_text) or str(report_text).strip() == ""):
+                per_label_meta: List[Dict[str, Any]] = []
+                aggregated_predictions: Dict[str, int] = {}
+                for label in target_labels:
+                    label_resp, label_meta = client.get_labels(report_text, labels_override=[label])
+                    aggregated_predictions[label] = label_resp.get(label, 0)
+                    per_label_meta.append(label_meta)
+                meta = combine_meta(per_label_meta)
+                predicted_labels = aggregated_predictions
+            else:
+                # Note: Error handling logic inside client returns zeros on failure
+                predicted_labels, meta = client.get_labels(report_text)
         
         # Track Stats
         latency = meta.get("latency_seconds", 0.0)
@@ -254,9 +459,29 @@ def main(cfg: DictConfig) -> None:
         
         p_tok = meta.get("prompt_tokens", 0)
         c_tok = meta.get("completion_tokens", 0)
+        total_tokens = meta.get("total_tokens", p_tok + c_tok)
+        if (not total_tokens) and (p_tok or c_tok):
+            total_tokens = p_tok + c_tok
         
         cost = estimate_cost(cfg.api.model, p_tok, c_tok, pricing_table)
         total_cost += cost
+
+        storage_row = {
+            "VolumeName": vol_name,
+            "report_hash": report_hash,
+            "prompt_tokens": p_tok,
+            "completion_tokens": c_tok,
+            "total_tokens": total_tokens,
+            "latency_seconds": latency,
+            "model_version": meta.get("model_version", cfg.api.model),
+            "request_id": meta.get("request_id", ""),
+            "retry_count": meta.get("retry_count", 0),
+            "started_at_utc": meta.get("started_at_utc", ""),
+            "ended_at_utc": meta.get("ended_at_utc", ""),
+            "status": meta.get("status", ""),
+            "error_message": meta.get("error_message", "")
+        }
+        storage_row.update({f"pred_{k}": predicted_labels.get(k, 0) for k in target_labels})
 
         # Record result row
         result_row = {"VolumeName": vol_name}
@@ -287,6 +512,25 @@ def main(cfg: DictConfig) -> None:
 
         predictions.append(result_row)
 
+        if not row_was_resumed:
+            append_prediction_row(storage_row)
+
+    remaining_hash_rows = sum(len(items) for items in resume_hash_map.values())
+    if resume_volume_map or remaining_hash_rows:
+        log.warning(
+            "%d resume rows were not matched to current input (by VolumeName) and %d unmatched hash entries remained.",
+            len(resume_volume_map),
+            remaining_hash_rows
+        )
+    if hash_collision_skips:
+        log.warning(
+            "Skipped %d resume rows due to duplicate report hashes; they were reevaluated in this run.",
+            hash_collision_skips
+        )
+
+    if resumed_count:
+        log.info("Reused %d previously evaluated reports via resume support.", resumed_count)
+
     # 5. Calculate Metrics
     results_df = pd.DataFrame(predictions)
     metric_rows = []
@@ -316,8 +560,6 @@ def main(cfg: DictConfig) -> None:
     metrics_df = pd.concat([metrics_df, pd.DataFrame([macro_avg])], ignore_index=True)
 
     # 6. Save Outputs
-    output_dir = HydraConfig.get().runtime.output_dir
-    
     metrics_path = os.path.join(output_dir, "evaluation_metrics.csv")
     discrepancies_path = os.path.join(output_dir, "discrepancies.csv")
     summary_path = os.path.join(output_dir, "run_summary.json")

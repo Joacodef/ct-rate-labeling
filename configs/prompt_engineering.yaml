@@ -1,6 +1,6 @@
 defaults:
   - _self_
-  - prompt: 3-shot_multi_v1
+  - prompt: zero-shot_multi
 
 hydra:
   run:

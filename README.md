@@ -49,6 +49,66 @@ All runtime parameters are managed via [Hydra](https://hydra.cc/).
     * **Crucial**: These names must exactly match the `training.target_labels` in the downstream `ct-rate-feature-benchmarks` project.
 * **System Prompt**: You can modify the `system_prompt` in this file to refine the LLM's instructions (e.g., how to handle uncertainty or negation).
 
+## 🧪 Methodology & Prompt Engineering
+
+This repository employs an iterative approach to prompt tuning. The goal is to maximize classification performance (F1 Score) while minimizing inference costs before processing the full dataset.
+
+### 1. Data Strategy
+We split the validation process into two stages to balance speed and statistical significance:
+
+* **Fast Loop (`data/tiny_tuning_set.csv`)**: A small, curated set (30–50 reports) used for rapid prototyping. Contains borderline cases and difficult negatives.
+* **Validation Set (`data/tuning_set.csv`)**: A larger set (~600 reports) used for final confirmation of metrics.
+* **Production Set**: The full dataset (e.g., `data/all_reports.csv`) is processed only after the configuration is frozen.
+
+### 2. Experimental Workflow
+We use `scripts/evaluate_prompt.py` to compare different models, prompting strategies, and modes.
+
+#### Step A: Establish Baseline (Zero-Shot)
+Start with the cheapest model and simplest prompt to set a baseline cost and F1 score.
+```bash
+python scripts/evaluate_prompt.py --config-name prompt_engineering \
+    prompt=zero-shot_multi \
+    api.model=gpt-5-nano
+````
+
+#### Step B: Strategy Iteration
+
+Test whether few-shot examples or single-label prompting improves performance on difficult pathologies.
+
+  * **Few-Shot:** Inject curated examples (defined in `configs/prompt/3-shot_multi_v1.yaml`).
+    ```bash
+    python scripts/evaluate_prompt.py --config-name prompt_engineering \
+        prompt=3-shot_multi_v1 \
+        prompt.examples_enabled=true
+    ```
+  * **Single-Label Mode:** Force the LLM to focus on one label at a time (higher cost, potentially higher accuracy for subtle findings).
+    ```bash
+    python scripts/evaluate_prompt.py --config-name prompt_engineering \
+        prompt=zero-shot_single \
+        api.model=gpt-5-nano
+    ```
+
+#### Step C: Model Sweeps
+
+Once the prompt strategy is fixed, use Hydra's multi-run (`-m`) capability to find the "intelligence vs. cost" sweet spot.
+
+```bash
+python scripts/evaluate_prompt.py --config-name prompt_engineering \
+    -m api.model=gpt-5-nano,gpt-5-mini,gpt-4.1 \
+    prompt=3-shot_multi_v1
+```
+
+### 3\. Evaluation Metrics
+
+The script outputs:
+
+1.  **`evaluation_metrics.csv`**: Precision, Recall, and F1 for each label.
+2.  **`run_summary.json`**: Total estimated cost (USD) and average latency.
+3.  **`discrepancies.csv`**: A row-by-row log of where the LLM disagreed with the ground truth, useful for debugging vague reports.
+
+<!-- end list -->
+
+
 ## ⚡ Usage
 
 To run the label generation script:
