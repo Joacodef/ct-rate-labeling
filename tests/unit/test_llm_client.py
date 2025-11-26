@@ -142,5 +142,84 @@ class TestLLMClient(unittest.TestCase):
         self.assertTrue(meta["started_at_utc"].endswith("Z"))
         self.assertTrue(meta["ended_at_utc"].endswith("Z"))
 
+    @patch('ctr_labeling.llm_client.OpenAI')
+    def test_get_labels_includes_label_names_in_prompt(self, mock_openai):
+        mock_response = MagicMock()
+        mock_response.choices[0].message.content = json.dumps({
+            "Label_A": 1,
+            "Label_B": 0
+        })
+        mock_response.usage.prompt_tokens = 10
+        mock_response.usage.completion_tokens = 5
+        mock_response.usage.total_tokens = 15
+        mock_response.id = "resp_prompt"
+        mock_response.model = "gpt-test"
+
+        mock_instance = mock_openai.return_value
+        mock_instance.chat.completions.create.return_value = mock_response
+
+        client = LLMClient(self.cfg)
+        client.get_labels("Some report text")
+
+        messages = mock_instance.chat.completions.create.call_args[1]["messages"]
+        user_message = messages[-1]["content"]
+        self.assertIn("Target findings:", user_message)
+        self.assertIn("- Label_A", user_message)
+        self.assertIn("- Label_B", user_message)
+
+    @patch('ctr_labeling.llm_client.OpenAI')
+    def test_get_labels_single_label_override(self, mock_openai):
+        mock_response = MagicMock()
+        mock_response.choices[0].message.content = json.dumps({
+            "Label_B": 1
+        })
+        mock_response.usage.prompt_tokens = 12
+        mock_response.usage.completion_tokens = 3
+        mock_response.usage.total_tokens = 15
+        mock_response.id = "resp_single"
+        mock_response.model = "gpt-test"
+
+        mock_instance = mock_openai.return_value
+        mock_instance.chat.completions.create.return_value = mock_response
+
+        client = LLMClient(self.cfg)
+        labels, _ = client.get_labels("Report", labels_override=["Label_B"])
+
+        self.assertEqual(labels, {"Label_B": 1})
+
+        messages = mock_instance.chat.completions.create.call_args[1]["messages"]
+        user_message = messages[-1]["content"]
+        self.assertIn("- Label_B", user_message)
+        self.assertNotIn("- Label_A", user_message)
+
+    @patch('ctr_labeling.llm_client.OpenAI')
+    def test_examples_can_be_disabled(self, mock_openai):
+        self.cfg.prompt.examples = [{
+            "report": "Example report",
+            "output": {"Label_A": 0, "Label_B": 1}
+        }]
+        self.cfg.prompt.examples_enabled = False
+
+        mock_response = MagicMock()
+        mock_response.choices[0].message.content = json.dumps({
+            "Label_A": 0,
+            "Label_B": 1
+        })
+        mock_response.usage.prompt_tokens = 8
+        mock_response.usage.completion_tokens = 4
+        mock_response.usage.total_tokens = 12
+        mock_response.id = "resp_examples"
+        mock_response.model = "gpt-test"
+
+        mock_instance = mock_openai.return_value
+        mock_instance.chat.completions.create.return_value = mock_response
+
+        client = LLMClient(self.cfg)
+        client.get_labels("Another report")
+
+        messages = mock_instance.chat.completions.create.call_args[1]["messages"]
+        # With examples disabled, only system + user messages should be sent
+        self.assertEqual(len(messages), 2)
+
 if __name__ == '__main__':
     unittest.main()

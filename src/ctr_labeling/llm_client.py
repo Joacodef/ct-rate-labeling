@@ -2,7 +2,7 @@ import json
 import logging
 import time
 from datetime import datetime
-from typing import Dict, List, Any, Tuple
+from typing import Any, Dict, List, Sequence, Tuple
 
 import pandas as pd
 from openai import OpenAI, APIError, RateLimitError, APIConnectionError
@@ -32,6 +32,13 @@ class LLMClient:
         self.temperature = cfg.api.temperature
         self.system_prompt = cfg.prompt.system_prompt
         self.target_labels = list(cfg.prompt.labels)
+        self.examples_enabled = bool(cfg.prompt.get("examples_enabled", True))
+        raw_examples = cfg.prompt.get("examples", [])
+        # Load optional few-shot examples; default to empty list if not present
+        if self.examples_enabled and raw_examples:
+            self.examples = list(raw_examples)
+        else:
+            self.examples = []
         
         # Configure the retry strategy dynamically based on config
         self.retrier = Retrying(
@@ -70,30 +77,66 @@ class LLMClient:
             response_format={"type": "json_object"}
         )
 
-    def get_labels(self, report_text: str) -> Tuple[Dict[str, int], Dict[str, Any]]:
+    def _format_user_message(self, report_text: str, labels: List[str]) -> str:
+        """Create the user-visible text that lists the report and requested labels."""
+        label_list = labels or self.target_labels
+        label_lines = "\n".join(f"- {label}" for label in label_list)
+        return (
+            f"Report:\n{report_text}\n\n"
+            f"Target findings:\n{label_lines}\n"
+            "Return a JSON object that only contains these findings as keys with 0/1 values."
+        )
+
+    def _resolve_active_labels(self, labels_override: Sequence[str] | None) -> List[str]:
+        if labels_override:
+            if isinstance(labels_override, str):
+                candidate_source = [labels_override]
+            else:
+                candidate_source = labels_override
+            cleaned = [str(label).strip() for label in candidate_source if str(label).strip()]
+            if cleaned:
+                return cleaned
+        return list(self.target_labels)
+
+    def get_labels(self, report_text: str, labels_override: Sequence[str] | None = None) -> Tuple[Dict[str, int], Dict[str, Any]]:
         """
         Extracts binary labels from a single radiology report.
         
         Args:
             report_text: The raw text of the radiology report.
+            labels_override: Optional subset of labels to request in this prompt.
             
         Returns:
             A tuple containing:
             1. Dictionary mapping label names to 0 or 1.
             2. Metadata dictionary with token usage, latency, status, and error details.
         """
+        active_labels = self._resolve_active_labels(labels_override)
         # Default metadata for failures/skips
         empty_meta = self._base_meta(status="skipped")
-        empty_labels = {label: 0 for label in self.target_labels}
+        empty_labels = {label: 0 for label in active_labels}
 
         # Handle empty or NaN reports immediately
         if pd.isna(report_text) or str(report_text).strip() == "":
             return empty_labels, empty_meta
 
-        messages = [
-            {"role": "system", "content": self.system_prompt},
-            {"role": "user", "content": f"Report:\n{report_text}"}
-        ]
+        # Construct the conversation history
+        messages = [{"role": "system", "content": self.system_prompt}]
+
+        # Inject few-shot examples if configured
+        for example in self.examples:
+            ex_report = example.get("report", "")
+            ex_labels = self._resolve_active_labels(example.get("labels"))
+            # Ensure output is formatted as a JSON string
+            ex_output = example.get("output", "")
+            if not isinstance(ex_output, str):
+                ex_output = json.dumps(ex_output)
+
+            messages.append({"role": "user", "content": self._format_user_message(ex_report, ex_labels)})
+            messages.append({"role": "assistant", "content": ex_output})
+
+        # Append the actual target report
+        messages.append({"role": "user", "content": self._format_user_message(report_text, active_labels)})
 
         prompt_tokens = 0
         completion_tokens = 0
@@ -143,7 +186,7 @@ class LLMClient:
 
             # Parse and validate
             parsed_json = clean_and_parse_json(content)
-            labels = validate_response(parsed_json, self.target_labels)
+            labels = validate_response(parsed_json, active_labels)
             
             return labels, meta
             

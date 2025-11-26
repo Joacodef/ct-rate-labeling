@@ -9,6 +9,12 @@ system_prompt: |
   5. If an abnormality is not mentioned, assume it is absent (0).
   6. Return the result ONLY as a valid JSON object where keys are the abnormality names and values are 0 or 1. Do not include any markdown formatting or explanation.
 
+# How the client should issue prompts. "multi" requests all labels at once, "single" sends one label per API call.
+mode: "single"
+
+# Allows toggling few-shot examples without editing the list itself.
+examples_enabled: false
+
 labels:
   #- "Medical material"
   - "Arterial wall calcification"
@@ -28,3 +34,6 @@ labels:
   #- "Consolidation"
   #- "Bronchiectasis"
   #- "Interlobular septal thickening"
+
+  # Default to zero-shot (no examples)
+examples: []

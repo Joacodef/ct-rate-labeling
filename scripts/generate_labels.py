@@ -221,6 +221,11 @@ def main(cfg: DictConfig) -> None:
 
     target_labels = list(cfg.prompt.labels)
 
+    prompt_mode = str(cfg.prompt.get("mode", "multi")).lower()
+    if prompt_mode not in {"multi", "single"}:
+        log.error("prompt.mode must be either 'multi' or 'single'. Got '%s'", prompt_mode)
+        sys.exit(1)
+
     cols = [
         "VolumeName",
         *target_labels,
@@ -304,12 +309,106 @@ def main(cfg: DictConfig) -> None:
         )
         output_initialized = True
 
+    def combine_meta(meta_batch: List[Dict[str, Any]]) -> Dict[str, Any]:
+        combined = {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "latency_seconds": 0.0,
+            "status": "success",
+            "error_message": "",
+            "request_id": "",
+            "model_version": "",
+            "retry_count": 0,
+            "started_at_utc": "",
+            "ended_at_utc": ""
+        }
+
+        if not meta_batch:
+            combined["status"] = "skipped"
+            return combined
+
+        request_ids: List[str] = []
+        model_versions: List[str] = []
+        statuses: List[str] = []
+        error_messages: List[str] = []
+        start_times: List[str] = []
+        end_times: List[str] = []
+
+        for meta in meta_batch:
+            combined["prompt_tokens"] += int(_safe_number(meta.get("prompt_tokens"), 0))
+            combined["completion_tokens"] += int(_safe_number(meta.get("completion_tokens"), 0))
+            combined["total_tokens"] += int(_safe_number(meta.get("total_tokens"), 0))
+            combined["latency_seconds"] += float(_safe_number(meta.get("latency_seconds"), 0.0))
+            combined["retry_count"] += int(_safe_number(meta.get("retry_count"), 0))
+
+            status_value = meta.get("status")
+            if isinstance(status_value, str) and status_value:
+                statuses.append(status_value)
+
+            error_value = meta.get("error_message")
+            if isinstance(error_value, str) and error_value:
+                error_messages.append(error_value)
+
+            request_value = meta.get("request_id")
+            if isinstance(request_value, str) and request_value:
+                request_ids.append(request_value)
+
+            model_value = meta.get("model_version")
+            if isinstance(model_value, str) and model_value and model_value not in model_versions:
+                model_versions.append(model_value)
+
+            start_value = meta.get("started_at_utc")
+            if isinstance(start_value, str) and start_value:
+                start_times.append(start_value)
+
+            end_value = meta.get("ended_at_utc")
+            if isinstance(end_value, str) and end_value:
+                end_times.append(end_value)
+
+        if any(status == "error" for status in statuses):
+            combined["status"] = "error"
+        elif statuses and all(status == "skipped" for status in statuses):
+            combined["status"] = "skipped"
+        else:
+            combined["status"] = "success"
+
+        if error_messages:
+            unique_errors = list(dict.fromkeys(error_messages))
+            combined["error_message"] = " | ".join(unique_errors)
+
+        if request_ids:
+            combined["request_id"] = " | ".join(request_ids)
+
+        if model_versions:
+            combined["model_version"] = " | ".join(model_versions)
+
+        if start_times:
+            combined["started_at_utc"] = min(start_times)
+
+        if end_times:
+            combined["ended_at_utc"] = max(end_times)
+
+        return combined
+
     # 3. Initialize LLM Client
     try:
         client = LLMClient(cfg)
     except Exception as e:
         log.error(f"Failed to initialize LLM Client: {e}")
         sys.exit(1)
+
+    def run_single_label_mode(report_text: str) -> Tuple[Dict[str, int], Dict[str, Any]]:
+        per_label_meta: List[Dict[str, Any]] = []
+        aggregated_labels: Dict[str, int] = {}
+
+        for label in target_labels:
+            label_response, label_meta = client.get_labels(report_text, labels_override=[label])
+            aggregated_labels[label] = label_response.get(label, 0)
+            per_label_meta.append(label_meta)
+
+        combined_meta = combine_meta(per_label_meta)
+        return aggregated_labels, combined_meta
 
     # 4. Optional resume support
     resume_volume_map, resume_hash_map = load_resume_data(resume_csv_path)
@@ -367,7 +466,11 @@ def main(cfg: DictConfig) -> None:
             row_result["estimated_cost_usd"] = rounded_cost
         else:
             # Delegate logic to the client package
-            labels, meta = client.get_labels(report)
+            report_is_empty = pd.isna(report) or str(report).strip() == ""
+            if prompt_mode == "single" and not report_is_empty:
+                labels, meta = run_single_label_mode(report)
+            else:
+                labels, meta = client.get_labels(report)
 
             p_tok = meta.get("prompt_tokens", 0)
             c_tok = meta.get("completion_tokens", 0)
