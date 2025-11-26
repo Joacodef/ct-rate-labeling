@@ -34,7 +34,7 @@ This project uses [uv](https://github.com/astral-sh/uv) for package management.
 
 All runtime parameters are managed via [Hydra](https://hydra.cc/).
 
-### 1. Input Data & API Settings (`configs/config.yaml`)
+### 1. Input Data & API Settings (`configs/prompt_engineering.yaml`)
 * **Input CSV**: Update `io.reports_csv` to point to your input file. This file must contain:
     * `VolumeName`: The unique identifier for the scan (e.g., `train_1_a_1.nii.gz`).
     * `report_text`: The raw radiology report.

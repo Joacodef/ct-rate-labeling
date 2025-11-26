@@ -250,7 +250,7 @@ def remove_hash_record(
                 hash_map.pop(rhash, None)
             break
 
-@hydra.main(version_base=None, config_path="../configs", config_name="config")
+@hydra.main(version_base=None, config_path="../configs", config_name="prompt_engineering")
 def main(cfg: DictConfig) -> None:
     """
     Evaluates the prompt by comparing LLM predictions against manual ground truth.
