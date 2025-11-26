@@ -70,6 +70,95 @@ def calculate_binary_metrics(df: pd.DataFrame, true_col: str, pred_col: str) -> 
         "tn": int(tn)
     }
 
+
+def get_case_insensitive_column(df: pd.DataFrame, target_name: str) -> str:
+    """Return the actual column name matching target_name regardless of case."""
+    matches = [col for col in df.columns if col.lower() == target_name.lower()]
+    if not matches:
+        raise KeyError(f"Column '{target_name}' not found (case-insensitive search).")
+    return matches[0]
+
+
+def combine_meta(meta_batch: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Aggregate metadata from multiple per-label calls into a single record."""
+    combined = {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "latency_seconds": 0.0,
+        "status": "success",
+        "error_message": "",
+        "request_id": "",
+        "model_version": "",
+        "retry_count": 0,
+        "started_at_utc": "",
+        "ended_at_utc": ""
+    }
+
+    if not meta_batch:
+        combined["status"] = "skipped"
+        return combined
+
+    request_ids: List[str] = []
+    model_versions: List[str] = []
+    statuses: List[str] = []
+    error_messages: List[str] = []
+    start_times: List[str] = []
+    end_times: List[str] = []
+
+    for meta in meta_batch:
+        combined["prompt_tokens"] += int(meta.get("prompt_tokens", 0) or 0)
+        combined["completion_tokens"] += int(meta.get("completion_tokens", 0) or 0)
+        combined["total_tokens"] += int(meta.get("total_tokens", meta.get("prompt_tokens", 0) + meta.get("completion_tokens", 0)) or 0)
+        combined["latency_seconds"] += float(meta.get("latency_seconds", 0.0) or 0.0)
+        combined["retry_count"] += int(meta.get("retry_count", 0) or 0)
+
+        status_val = meta.get("status")
+        if isinstance(status_val, str) and status_val:
+            statuses.append(status_val)
+
+        error_val = meta.get("error_message")
+        if isinstance(error_val, str) and error_val:
+            error_messages.append(error_val)
+
+        req_val = meta.get("request_id")
+        if isinstance(req_val, str) and req_val:
+            request_ids.append(req_val)
+
+        model_val = meta.get("model_version")
+        if isinstance(model_val, str) and model_val and model_val not in model_versions:
+            model_versions.append(model_val)
+
+        start_val = meta.get("started_at_utc")
+        if isinstance(start_val, str) and start_val:
+            start_times.append(start_val)
+
+        end_val = meta.get("ended_at_utc")
+        if isinstance(end_val, str) and end_val:
+            end_times.append(end_val)
+
+    if any(status == "error" for status in statuses):
+        combined["status"] = "error"
+    elif statuses and all(status == "skipped" for status in statuses):
+        combined["status"] = "skipped"
+
+    if error_messages:
+        combined["error_message"] = " | ".join(dict.fromkeys(error_messages))
+
+    if request_ids:
+        combined["request_id"] = " | ".join(request_ids)
+
+    if model_versions:
+        combined["model_version"] = " | ".join(model_versions)
+
+    if start_times:
+        combined["started_at_utc"] = min(start_times)
+
+    if end_times:
+        combined["ended_at_utc"] = max(end_times)
+
+    return combined
+
 @hydra.main(version_base=None, config_path="../configs", config_name="config")
 def main(cfg: DictConfig) -> None:
     """
@@ -93,8 +182,24 @@ def main(cfg: DictConfig) -> None:
         log.error(f"Failed to load CSV: {e}")
         sys.exit(1)
 
+    try:
+        volume_col = get_case_insensitive_column(df, "VolumeName")
+    except KeyError as exc:
+        log.error(str(exc))
+        sys.exit(1)
+
+    try:
+        report_col = get_case_insensitive_column(df, "report_text")
+    except KeyError as exc:
+        log.error(str(exc))
+        sys.exit(1)
+
     # 2. Validate Ground Truth Columns
     target_labels = list(cfg.prompt.labels)
+    prompt_mode = str(cfg.prompt.get("mode", "multi")).lower()
+    if prompt_mode not in {"multi", "single"}:
+        log.error("prompt.mode must be either 'multi' or 'single'. Got '%s'", prompt_mode)
+        sys.exit(1)
     missing_cols = [label for label in target_labels if label not in df.columns]
     
     if missing_cols:
@@ -126,13 +231,22 @@ def main(cfg: DictConfig) -> None:
     log.info(f"Evaluating on {len(df)} reports...")
     
     for _, row in tqdm(df.iterrows(), total=len(df), desc="Evaluating"):
-        vol_name = row.get("VolumeName", "Unknown")
-        report_text = row.get("report_text", "")
+        vol_name = row.get(volume_col, "Unknown")
+        report_text = row.get(report_col, "")
         
-        # Get LLM Predictions
-        # We generally use multi-mode for eval speed, unless config forces 'single'
-        # Note: Error handling logic inside client returns zeros on failure
-        predicted_labels, meta = client.get_labels(report_text)
+        # Get LLM Predictions (single mode mirrors scripts/generate_labels.py behavior)
+        if prompt_mode == "single" and not (pd.isna(report_text) or str(report_text).strip() == ""):
+            per_label_meta: List[Dict[str, Any]] = []
+            aggregated_predictions: Dict[str, int] = {}
+            for label in target_labels:
+                label_resp, label_meta = client.get_labels(report_text, labels_override=[label])
+                aggregated_predictions[label] = label_resp.get(label, 0)
+                per_label_meta.append(label_meta)
+            meta = combine_meta(per_label_meta)
+            predicted_labels = aggregated_predictions
+        else:
+            # Note: Error handling logic inside client returns zeros on failure
+            predicted_labels, meta = client.get_labels(report_text)
         
         # Track Stats
         latency = meta.get("latency_seconds", 0.0)
