@@ -1,13 +1,13 @@
 defaults:
   - _self_
-  - prompt: default
+  - prompt: zero-shot_multi
 
 hydra:
   run:
     dir: outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}
 
 io:
-  reports_csv: "data/tiny_test.csv" # Required input CSV with VolumeName + report_text columns
+  reports_csv: "data/tiny_tuning_set.csv" # Required input CSV with VolumeName + report_text columns
   output_csv: "labels.csv"         # Relative filename for the newly generated labels
 
 api:

@@ -36,10 +36,10 @@ else:
     sys.argv = [sys.argv[0]] + remaining
 # If running locally without installation, fallback to adding src to path.
 try:
-    from ctr_labeling import LLMClient
+    from ctr_labeling import LLMClient, estimate_cost
 except ImportError:
     sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../src")))
-    from ctr_labeling import LLMClient
+    from ctr_labeling import LLMClient, estimate_cost
 
 log = logging.getLogger(__name__)
 UNPRICED_MODELS_WARNED = set()
@@ -116,52 +116,6 @@ def remove_hash_record(
                 hash_map.pop(rhash, None)
             break
 
-def estimate_cost(
-    model_name: str,
-    prompt_tokens: int,
-    completion_tokens: int,
-    pricing_table: dict,
-    precision: int = 8
-) -> float:
-    """Estimate USD cost using pricing data supplied via config."""
-    if not pricing_table:
-        if model_name not in UNPRICED_MODELS_WARNED:
-            log.warning(
-                "No pricing table configured. Estimated cost for model '%s' will be 0.",
-                model_name
-            )
-            UNPRICED_MODELS_WARNED.add(model_name)
-        return 0.0
-
-    model_base = model_name.lower()
-    sorted_models = sorted(
-        ((key.lower(), value) for key, value in pricing_table.items()),
-        key=lambda item: len(item[0]),
-        reverse=True
-    )
-
-    for match_key, price_info in sorted_models:
-        if match_key in model_base:
-            input_price = price_info.get("input_per_million")
-            output_price = price_info.get("output_per_million")
-            if input_price is None or output_price is None:
-                log.warning(
-                    "Pricing entry '%s' lacks input/output rates; reporting 0 cost.",
-                    match_key
-                )
-                return 0.0
-
-            cost = (prompt_tokens / 1_000_000 * input_price) + \
-                   (completion_tokens / 1_000_000 * output_price)
-            return round(cost, precision)
-
-    if model_base not in UNPRICED_MODELS_WARNED:
-        log.warning(
-            "No pricing data matched model '%s'. Estimated cost will be reported as 0.",
-            model_name
-        )
-        UNPRICED_MODELS_WARNED.add(model_base)
-    return 0.0
 
 @hydra.main(version_base=None, config_path="../configs", config_name="config")
 def main(cfg: DictConfig) -> None:

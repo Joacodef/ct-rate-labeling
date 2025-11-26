@@ -1,0 +1,247 @@
+import argparse
+import logging
+import os
+import sys
+from typing import Any, Dict, List, Tuple
+
+import pandas as pd
+import hydra
+from omegaconf import DictConfig, OmegaConf
+from tqdm import tqdm
+from dotenv import load_dotenv
+from hydra.core.hydra_config import HydraConfig
+
+# Load environment variables from .env file
+load_dotenv()
+
+# Boilerplate to ensure we can import from src/ even if not installed
+try:
+    from ctr_labeling import LLMClient, estimate_cost
+except ImportError:
+    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../src")))
+    from ctr_labeling import LLMClient, estimate_cost
+
+log = logging.getLogger(__name__)
+
+def calculate_binary_metrics(df: pd.DataFrame, true_col: str, pred_col: str) -> Dict[str, float]:
+    """
+    Calculates Precision, Recall, and F1 for binary classification.
+    Handles edge cases where no positive examples exist in the ground truth.
+    """
+    # Ensure inputs are numeric 0/1
+    y_true = pd.to_numeric(df[true_col], errors='coerce').fillna(0).astype(int)
+    y_pred = pd.to_numeric(df[pred_col], errors='coerce').fillna(0).astype(int)
+
+    # True Positives, False Positives, False Negatives, True Negatives
+    tp = ((y_pred == 1) & (y_true == 1)).sum()
+    fp = ((y_pred == 1) & (y_true == 0)).sum()
+    fn = ((y_pred == 0) & (y_true == 1)).sum()
+    tn = ((y_pred == 0) & (y_true == 0)).sum()
+    
+    # Check for "Zero Support" case (No positives in Ground Truth)
+    if (tp + fn) == 0:
+        if fp == 0:
+            # Perfect Rejection: Model correctly predicted 0 for all cases.
+            # We assign 1.0 to reflect that the model made no errors.
+            return {
+                "precision": 1.0, "recall": 1.0, "f1": 1.0,
+                "tp": int(tp), "fp": int(fp), "fn": int(fn), "tn": int(tn)
+            }
+        else:
+            # Hallucination: Model predicted positive when none existed.
+            # Precision is 0 (0 correct / N predicted). Recall is undefined (assigned 0).
+            return {
+                "precision": 0.0, "recall": 0.0, "f1": 0.0,
+                "tp": int(tp), "fp": int(fp), "fn": int(fn), "tn": int(tn)
+            }
+
+    # Standard Calculation
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
+
+    return {
+        "precision": round(precision, 4),
+        "recall": round(recall, 4),
+        "f1": round(f1, 4),
+        "tp": int(tp),
+        "fp": int(fp),
+        "fn": int(fn),
+        "tn": int(tn)
+    }
+
+@hydra.main(version_base=None, config_path="../configs", config_name="config")
+def main(cfg: DictConfig) -> None:
+    """
+    Evaluates the prompt by comparing LLM predictions against manual ground truth.
+    Output:
+      1. metrics.csv: Per-label precision, recall, and F1.
+      2. discrepancies.csv: Detailed list of mismatches for analysis.
+    """
+    log.info(f"Starting prompt evaluation with configuration:\n{OmegaConf.to_yaml(cfg)}")
+
+    # 1. Validate Input
+    input_path = cfg.io.reports_csv
+    if not os.path.exists(input_path):
+        log.error(f"Input file not found at: {input_path}")
+        sys.exit(1)
+
+    log.info(f"Loading ground truth data from {input_path}...")
+    try:
+        df = pd.read_csv(input_path)
+    except Exception as e:
+        log.error(f"Failed to load CSV: {e}")
+        sys.exit(1)
+
+    # 2. Validate Ground Truth Columns
+    target_labels = list(cfg.prompt.labels)
+    missing_cols = [label for label in target_labels if label not in df.columns]
+    
+    if missing_cols:
+        log.error(
+            f"The input CSV is missing the following ground truth columns required for evaluation: {missing_cols}\n"
+            "Ensure you are pointing to a file that contains manual labels (e.g., tuning_set.csv)."
+        )
+        sys.exit(1)
+
+    # 3. Initialize Client
+    try:
+        client = LLMClient(cfg)
+    except Exception as e:
+        log.error(f"Failed to initialize LLM Client: {e}")
+        sys.exit(1)
+
+    # Setup Cost & Stats tracking
+    pricing_cfg = cfg.api.get("pricing", {})
+    # Convert OmegaConf object to standard dict for the estimator
+    pricing_table = OmegaConf.to_container(pricing_cfg, resolve=True) if pricing_cfg else {}
+    
+    total_cost = 0.0
+    latencies = []
+
+    # 4. Processing Loop
+    predictions = []
+    discrepancies = []
+
+    log.info(f"Evaluating on {len(df)} reports...")
+    
+    for _, row in tqdm(df.iterrows(), total=len(df), desc="Evaluating"):
+        vol_name = row.get("VolumeName", "Unknown")
+        report_text = row.get("report_text", "")
+        
+        # Get LLM Predictions
+        # We generally use multi-mode for eval speed, unless config forces 'single'
+        # Note: Error handling logic inside client returns zeros on failure
+        predicted_labels, meta = client.get_labels(report_text)
+        
+        # Track Stats
+        latency = meta.get("latency_seconds", 0.0)
+        latencies.append(latency)
+        
+        p_tok = meta.get("prompt_tokens", 0)
+        c_tok = meta.get("completion_tokens", 0)
+        
+        cost = estimate_cost(cfg.api.model, p_tok, c_tok, pricing_table)
+        total_cost += cost
+
+        # Record result row
+        result_row = {"VolumeName": vol_name}
+        result_row.update({f"pred_{k}": v for k, v in predicted_labels.items()})
+        
+        # Keep original truths for easier dataframe construction
+        for label in target_labels:
+            actual_val = row[label]
+            result_row[f"true_{label}"] = actual_val
+            
+            # Check for Discrepancy
+            # Normalize actual_val to int (0/1) for comparison
+            try:
+                actual_int = int(float(actual_val)) if pd.notna(actual_val) else 0
+            except ValueError:
+                actual_int = 0
+                
+            pred_int = predicted_labels.get(label, 0)
+            
+            if pred_int != actual_int:
+                discrepancies.append({
+                    "VolumeName": vol_name,
+                    "Label": label,
+                    "Predicted": pred_int,
+                    "Actual": actual_int,
+                    "Report": report_text
+                })
+
+        predictions.append(result_row)
+
+    # 5. Calculate Metrics
+    results_df = pd.DataFrame(predictions)
+    metric_rows = []
+    
+    log.info("Calculating metrics...")
+    for label in target_labels:
+        true_col = f"true_{label}"
+        pred_col = f"pred_{label}"
+        
+        stats = calculate_binary_metrics(results_df, true_col, pred_col)
+        stats["label"] = label
+        metric_rows.append(stats)
+
+    metrics_df = pd.DataFrame(metric_rows)
+    
+    # Calculate Macro Averages
+    macro_avg = {
+        "label": "MACRO_AVERAGE",
+        "precision": round(metrics_df["precision"].mean(), 4),
+        "recall": round(metrics_df["recall"].mean(), 4),
+        "f1": round(metrics_df["f1"].mean(), 4),
+        "tp": metrics_df["tp"].sum(),
+        "fp": metrics_df["fp"].sum(),
+        "fn": metrics_df["fn"].sum(),
+        "tn": metrics_df["tn"].sum(),
+    }
+    metrics_df = pd.concat([metrics_df, pd.DataFrame([macro_avg])], ignore_index=True)
+
+    # 6. Save Outputs
+    output_dir = HydraConfig.get().runtime.output_dir
+    
+    metrics_path = os.path.join(output_dir, "evaluation_metrics.csv")
+    discrepancies_path = os.path.join(output_dir, "discrepancies.csv")
+    summary_path = os.path.join(output_dir, "run_summary.json")
+    
+    metrics_df.to_csv(metrics_path, index=False)
+    pd.DataFrame(discrepancies).to_csv(discrepancies_path, index=False)
+
+    # Calculate run-level stats
+    avg_latency = sum(latencies) / len(latencies) if latencies else 0.0
+    
+    # Save run summary to JSON
+    import json
+    with open(summary_path, 'w') as f:
+        json.dump({
+            "total_estimated_cost_usd": round(total_cost, 6),
+            "average_latency_seconds": round(avg_latency, 4),
+            "total_reports": len(df),
+            "model_version": cfg.api.model
+        }, f, indent=4)
+
+    # 7. Print Summary to Console
+    # avg_latency was calculated above for the JSON save
+    
+    print("\n" + "="*60)
+    print(f"EVALUATION COMPLETE")
+    print("="*60)
+    print(f"Total Estimated Cost:   ${total_cost:.4f}")
+    print(f"Avg Latency per Report: {avg_latency:.2f}s")
+    print("-" * 60)
+    print(f"Metrics saved to:       {metrics_path}")
+    print(f"Discrepancies saved to: {discrepancies_path}")
+    print(f"Run summary saved to:   {summary_path}")
+    print("-" * 60)
+    
+    # Format for readability
+    summary_view = metrics_df[["label", "precision", "recall", "f1", "tp", "fp", "fn"]]
+    print(summary_view.to_string(index=False))
+    print("="*60 + "\n")
+
+if __name__ == "__main__":
+    main()
