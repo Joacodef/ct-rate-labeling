@@ -45,9 +45,15 @@ except ImportError:
 log = logging.getLogger(__name__)
 
 def calculate_binary_metrics(df: pd.DataFrame, true_col: str, pred_col: str) -> Dict[str, float]:
-    """
-    Calculates Precision, Recall, and F1 for binary classification.
-    Handles edge cases where no positive examples exist in the ground truth.
+    """Compute precision/recall/F1 for binary classification with edge cases handled.
+
+    Args:
+        df: DataFrame containing the ground-truth and prediction columns.
+        true_col: Column name holding manual labels (0/1).
+        pred_col: Column name holding model predictions (0/1).
+
+    Returns:
+        Dictionary with precision, recall, F1, and confusion-matrix counts.
     """
     # Ensure inputs are numeric 0/1
     y_true = pd.to_numeric(df[true_col], errors='coerce').fillna(0).astype(int)
@@ -93,7 +99,18 @@ def calculate_binary_metrics(df: pd.DataFrame, true_col: str, pred_col: str) -> 
 
 
 def get_case_insensitive_column(df: pd.DataFrame, target_name: str) -> str:
-    """Return the actual column name matching target_name regardless of case."""
+    """Return the concrete column name matching ``target_name`` regardless of case.
+
+    Args:
+        df: DataFrame whose columns should be searched.
+        target_name: Desired column name spelled in any case.
+
+    Returns:
+        The exact column name from ``df`` matching the requested name.
+
+    Raises:
+        KeyError: If the column cannot be found in any casing.
+    """
     matches = [col for col in df.columns if col.lower() == target_name.lower()]
     if not matches:
         raise KeyError(f"Column '{target_name}' not found (case-insensitive search).")
@@ -101,7 +118,14 @@ def get_case_insensitive_column(df: pd.DataFrame, target_name: str) -> str:
 
 
 def combine_meta(meta_batch: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Aggregate metadata from multiple per-label calls into a single record."""
+    """Aggregate metadata from multiple per-label calls into a single record.
+
+    Args:
+        meta_batch: Sequence of dictionaries emitted by the LLM client per request.
+
+    Returns:
+        Dictionary summarizing token counts, latency, status, and identifiers.
+    """
     combined = {
         "prompt_tokens": 0,
         "completion_tokens": 0,
@@ -182,7 +206,15 @@ def combine_meta(meta_batch: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 def _safe_number(value: Any, default: float = 0.0) -> float:
-    """Convert a value to float while guarding against pandas NA objects."""
+    """Convert arbitrary input to float, guarding against pandas NA objects.
+
+    Args:
+        value: Raw input that may need coercion to float.
+        default: Fallback value when conversion is unsafe.
+
+    Returns:
+        A floating point representation of ``value`` or ``default`` on failure.
+    """
     if value is None:
         return default
     try:
@@ -197,7 +229,14 @@ def _safe_number(value: Any, default: float = 0.0) -> float:
 
 
 def load_resume_data(path: str) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, List[Dict[str, Any]]]]:
-    """Load an existing predictions CSV to support resuming a previous eval run."""
+    """Load an existing predictions CSV so evaluation can resume without rework.
+
+    Args:
+        path: Location of the predictions CSV produced by a previous run.
+
+    Returns:
+        Tuple of (volume_map, hash_map) ready for resume lookup.
+    """
     if not path or not os.path.exists(path):
         return {}, {}
 
@@ -237,7 +276,16 @@ def remove_hash_record(
     rhash: str,
     record: Dict[str, Any]
 ) -> None:
-    """Remove a specific record from the hash bucket if present."""
+    """Remove a specific resume row from the hash bucket when consumed.
+
+    Args:
+        hash_map: Mapping of report hashes to cached resume records.
+        rhash: Hash key that should contain the target record.
+        record: Resume row to remove from the hash bucket.
+
+    Returns:
+        None. Mutates ``hash_map`` in place.
+    """
     if not rhash:
         return
     bucket = hash_map.get(rhash)
@@ -252,11 +300,13 @@ def remove_hash_record(
 
 @hydra.main(version_base=None, config_path="../configs", config_name="prompt_engineering")
 def main(cfg: DictConfig) -> None:
-    """
-    Evaluates the prompt by comparing LLM predictions against manual ground truth.
-    Output:
-      1. metrics.csv: Per-label precision, recall, and F1.
-      2. discrepancies.csv: Detailed list of mismatches for analysis.
+    """Evaluate prompt performance by comparing LLM predictions to ground truth.
+
+    Args:
+        cfg: Hydra configuration referencing the evaluation CSV, prompt, and model.
+
+    Raises:
+        SystemExit: If inputs/configuration are invalid or the LLM client fails.
     """
     resume_predictions_path = ""
     if RESUME_RUN_DIR:
@@ -352,6 +402,14 @@ def main(cfg: DictConfig) -> None:
     predictions_initialized = os.path.exists(predictions_path) and os.path.getsize(predictions_path) > 0
 
     def append_prediction_row(row: Dict[str, Any]) -> None:
+        """Append a single prediction/metadata row to the CSV on disk.
+
+        Args:
+            row: Dictionary with prediction columns matching ``prediction_cols``.
+
+        Returns:
+            None. Writes streamed output to ``predictions_path``.
+        """
         nonlocal predictions_initialized
         df_row = pd.DataFrame([row], columns=prediction_cols)
         df_row.to_csv(

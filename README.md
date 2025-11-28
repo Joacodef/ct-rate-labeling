@@ -14,20 +14,32 @@ This project uses [uv](https://github.com/astral-sh/uv) for package management.
 
 1.  **Clone the repository:**
     ```bash
-    git clone [https://github.com/your-org/ct-rate-labeling.git](https://github.com/your-org/ct-rate-labeling.git)
+    git clone https://github.com/Joacodef/ct-rate-labeling.git
     cd ct-rate-labeling
     ```
 
 2.  **Create and activate a virtual environment:**
     ```bash
     uv venv
+    # macOS / Linux
     source .venv/bin/activate
+    # Windows (PowerShell)
+    .\.venv\Scripts\Activate.ps1
     ```
 
 3.  **Install dependencies:**
-    This command installs the dependencies defined in `pyproject.toml` and the package in editable mode.
+    Install the runtime requirements (default) or include the optional test stack when you plan to run `pytest`.
     ```bash
+    # Runtime only
     uv pip install -e .
+
+    # Runtime + test tooling (pytest, etc.)
+    uv pip install -e ".[tests]"
+    ```
+
+4.  **(Optional) Run the test suite:**
+    ```bash
+    uv run pytest tests
     ```
 
 ## ⚙️ Configuration
@@ -44,10 +56,11 @@ All runtime parameters are managed via [Hydra](https://hydra.cc/).
     ```
     The config automatically reads this via `${oc.env:OPENAI_API_KEY}`.
 
-### 2. Labels and Prompts (`configs/prompt/default.yaml`)
-* **Target Labels**: The list of abnormalities to extract is defined in `prompt.labels`.
+### 2. Labels and Prompts (`configs/prompt/*.yaml`)
+* **Prompt Selection**: Choose the prompt template by passing `prompt=<file_stem>` to Hydra (e.g., `prompt=zero-shot_multi`, `prompt=zero-shot_single`, `prompt=3-shot_multi_v1`). Each option maps to a YAML file under `configs/prompt/`.
+* **Target Labels**: The list of abnormalities to extract lives in `prompt.labels` inside the selected YAML file.
     * **Crucial**: These names must exactly match the `training.target_labels` in the downstream `ct-rate-feature-benchmarks` project.
-* **System Prompt**: You can modify the `system_prompt` in this file to refine the LLM's instructions (e.g., how to handle uncertainty or negation).
+* **System Prompt**: Adjust the `system_prompt` field within the chosen file to refine LLM instructions (handling uncertainty, negation, etc.).
 
 ## 🧪 Methodology & Prompt Engineering
 

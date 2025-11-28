@@ -28,6 +28,7 @@ parsed_args, remaining = parser.parse_known_args()
 RESUME_RUN_DIR = parsed_args.resume or ""
 if RESUME_RUN_DIR:
     resolved_resume_dir = os.path.abspath(RESUME_RUN_DIR)
+    # Rehydrate Hydra's runtime directory so subsequent config loading/writing matches the original run
     hydra_dir_override = f"hydra.run.dir={resolved_resume_dir}"
     sys.argv = [sys.argv[0], hydra_dir_override] + remaining
     os.environ["HYDRA_RUN_DIR"] = resolved_resume_dir
@@ -46,7 +47,15 @@ UNPRICED_MODELS_WARNED = set()
 
 
 def _safe_number(value, default=0.0):
-    """Convert a value to float, guarding against pandas NA objects."""
+    """Convert arbitrary input to a float, guarding against pandas NA objects.
+
+    Args:
+        value: Raw value to convert into a floating point number.
+        default: Fallback value returned when conversion fails or the input is NA.
+
+    Returns:
+        A float representation of ``value`` or ``default`` when coercion is unsafe.
+    """
     if value is None:
         return default
     try:
@@ -61,7 +70,15 @@ def _safe_number(value, default=0.0):
 
 
 def load_resume_data(path: str) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, List[Dict[str, Any]]]]:
-    """Load an existing labels CSV to support resuming a previous run."""
+    """Load a prior labels CSV so labeling can resume without duplicate API calls.
+
+    Args:
+        path: Absolute or relative path to the historical labels CSV file.
+
+    Returns:
+        Tuple of (by_volume_map, by_hash_map) where the first key is ``VolumeName``
+        and the second key is the SHA-256 hash of the report text.
+    """
     if not path:
         return {}, {}
     if not os.path.exists(path):
@@ -103,7 +120,16 @@ def remove_hash_record(
     rhash: str,
     record: Dict[str, Any]
 ) -> None:
-    """Remove a specific record from the hash bucket if present."""
+    """Remove a specific resume entry from the hash bucket when it is consumed.
+
+    Args:
+        hash_map: Mapping of report hashes to lists of cached resume rows.
+        rhash: Hash key that should contain ``record``.
+        record: Resume row that needs to be removed from the hash bucket.
+
+    Returns:
+        None. The provided mapping is mutated in place.
+    """
     if not rhash:
         return
     bucket = hash_map.get(rhash)
@@ -119,8 +145,15 @@ def remove_hash_record(
 
 @hydra.main(version_base=None, config_path="../configs", config_name="config")
 def main(cfg: DictConfig) -> None:
-    """
-    Main entry point for generating binary classification labels from radiology reports.
+    """Generate binary labels for radiology reports using the configured LLM pipeline.
+
+    Args:
+        cfg: Hydra configuration loaded from ``configs/config.yaml`` (or overrides)
+            containing I/O paths, API settings, and prompt definitions.
+
+    Raises:
+        SystemExit: If required configuration values or input files are missing, or if
+            the LLM client fails to initialize.
     """
     resume_csv_path = ""
     if RESUME_RUN_DIR:
@@ -232,6 +265,14 @@ def main(cfg: DictConfig) -> None:
     output_initialized = os.path.exists(output_path) and os.path.getsize(output_path) > 0
 
     def normalize_row(raw: Dict[str, Any]) -> Dict[str, Any]:
+        """Cast a raw result row into deterministic dtypes prior to persistence.
+
+        Args:
+            raw: Partially filled dictionary containing label outputs and metadata.
+
+        Returns:
+            A new dictionary with schema-aligned column names and sanitized values.
+        """
         normalized: Dict[str, Any] = {}
         for col in cols:
             value = raw.get(col)
@@ -253,6 +294,14 @@ def main(cfg: DictConfig) -> None:
         return normalized
 
     def append_row(row: Dict[str, Any]) -> None:
+        """Stream a normalized row to disk to avoid holding the entire run in memory.
+
+        Args:
+            row: Ordered dictionary produced by ``normalize_row`` ready for CSV output.
+
+        Returns:
+            None. Writes append to ``output_path``.
+        """
         nonlocal output_initialized
         df_row = pd.DataFrame([row], columns=cols)
         df_row.to_csv(
@@ -264,6 +313,14 @@ def main(cfg: DictConfig) -> None:
         output_initialized = True
 
     def combine_meta(meta_batch: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Collapse multiple per-label metadata records into a single aggregate.
+
+        Args:
+            meta_batch: Sequence of metadata dictionaries returned by the LLM client.
+
+        Returns:
+            Aggregated metadata summarizing counts, latency, and error state.
+        """
         combined = {
             "prompt_tokens": 0,
             "completion_tokens": 0,
@@ -353,6 +410,14 @@ def main(cfg: DictConfig) -> None:
         sys.exit(1)
 
     def run_single_label_mode(report_text: str) -> Tuple[Dict[str, int], Dict[str, Any]]:
+        """Query the LLM one label at a time while preserving shared aggregation logic.
+
+        Args:
+            report_text: Radiology report that needs per-label binary decisions.
+
+        Returns:
+            Tuple containing a mapping of labels to predictions and the merged metadata.
+        """
         per_label_meta: List[Dict[str, Any]] = []
         aggregated_labels: Dict[str, int] = {}
 
@@ -365,6 +430,7 @@ def main(cfg: DictConfig) -> None:
         return aggregated_labels, combined_meta
 
     # 4. Optional resume support
+    # Map prior run outputs by VolumeName and content hash so we can skip re-labeling
     resume_volume_map, resume_hash_map = load_resume_data(resume_csv_path)
     resumed_count = 0
     hash_collision_skips = 0
@@ -387,10 +453,12 @@ def main(cfg: DictConfig) -> None:
 
         report_hash = ""
         if not pd.isna(report):
+            # Hash the text so resume logic still works even if VolumeName changes between runs
             report_hash = hashlib.sha256(str(report).encode("utf-8")).hexdigest()
 
         resume_row = None
         if resume_volume_map:
+            # Prefer a direct VolumeName match since it is guaranteed unique in the CSV
             resume_row = resume_volume_map.pop(vol_name, None)
             if resume_row:
                 remove_hash_record(
@@ -399,6 +467,7 @@ def main(cfg: DictConfig) -> None:
                     resume_row
                 )
         if not resume_row and report_hash and resume_hash_map:
+            # Fall back to report hash matching so duplicated studies are not re-labeled
             bucket = resume_hash_map.get(report_hash)
             if bucket:
                 if len(bucket) == 1:

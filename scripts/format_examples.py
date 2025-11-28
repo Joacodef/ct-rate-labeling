@@ -17,12 +17,15 @@ log = logging.getLogger(__name__)
 
 @hydra.main(version_base=None, config_path="../configs", config_name="config")
 def main(cfg: DictConfig) -> None:
-    """
-    Utility to sample reports from a CSV and format them as YAML examples
-    for insertion into configs/prompt/default.yaml.
-    
-    Usage:
-        python scripts/format_examples.py io.reports_csv=data/prompt_examples.csv +n=5
+    """Sample reports and emit YAML-ready prompt examples for prompt configs.
+
+    Args:
+        cfg: Hydra configuration containing ``io.reports_csv`` (input CSV path),
+            optional ``n`` sample count, optional ``indices`` override, and
+            ``prompt.labels`` for the ground-truth columns to include.
+
+    Raises:
+        SystemExit: If the input CSV path does not exist on disk.
     """
     # 1. Load Data
     input_path = cfg.io.reports_csv

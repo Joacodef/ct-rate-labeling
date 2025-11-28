@@ -7,17 +7,16 @@ from typing import Dict, List, Any
 log = logging.getLogger(__name__)
 
 def clean_and_parse_json(text: str) -> Dict[str, Any]:
-    """
-    Cleans markdown formatting (e.g., ```json ... ```) and parses JSON.
-    
+    """Strip code fences from an LLM response and parse it as JSON.
+
     Args:
-        text: The raw string response from the LLM.
-        
+        text: Raw assistant response which might include markdown fences.
+
     Returns:
-        Parsed dictionary.
-        
+        Parsed Python object constructed from the JSON payload.
+
     Raises:
-        json.JSONDecodeError: If parsing fails.
+        json.JSONDecodeError: If JSON parsing fails after cleanup.
     """
     # Remove markdown code blocks
     # Pattern: ```json ... ``` or just ``` ... ```
@@ -31,12 +30,13 @@ def clean_and_parse_json(text: str) -> Dict[str, Any]:
     return json.loads(text)
 
 def normalize_binary_value(value: Any) -> int:
-    """
-    Converts various representations of truth/falsehood to 0 or 1.
-    
-    Supported:
-    - Integers: 0, 1
-    - Strings: "0", "1", "yes", "no", "true", "false", "present", "absent"
+    """Convert a truthy/falsy representation to a canonical 0 or 1.
+
+    Args:
+        value: Mixed-type input (int or string) describing presence/absence.
+
+    Returns:
+        ``1`` when the value is interpreted as positive/present, ``0`` otherwise.
     """
     if isinstance(value, int):
         # Treat any non-zero integer as 1, though we expect 0 or 1
@@ -53,15 +53,14 @@ def normalize_binary_value(value: Any) -> int:
     return 0
 
 def validate_response(response_json: Dict[str, Any], target_labels: List[str]) -> Dict[str, int]:
-    """
-    Validates and normalizes the LLM response.
-    
+    """Validate and normalize the LLM response for the requested labels.
+
     Args:
-        response_json: The parsed JSON object from the LLM.
-        target_labels: The list of expected abnormality labels.
-        
+        response_json: Parsed JSON content returned by the LLM.
+        target_labels: Ordered list of label names expected in the output.
+
     Returns:
-        A dictionary with guaranteed 0 or 1 values for all target labels.
+        Dict with each target label mapped to a normalized 0/1 integer.
     """
     validated = {}
     

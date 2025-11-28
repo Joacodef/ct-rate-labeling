@@ -22,11 +22,14 @@ from .parsing import validate_response, clean_and_parse_json
 log = logging.getLogger(__name__)
 
 class LLMClient:
-    """
-    A client for interacting with the LLM API to extract radiology labels.
-    Encapsulates retry logic and configuration.
-    """
+    """High-level wrapper around the OpenAI Chat API for labeling radiology reports."""
     def __init__(self, cfg: DictConfig):
+        """Initialize the LLM client with retry policy, prompts, and label config.
+
+        Args:
+            cfg: Hydra/OMEGACONF configuration supplying API credentials, model
+                metadata, prompt text, labels, and retry behavior.
+        """
         self.client = OpenAI(api_key=cfg.api.api_key)
         self.model = cfg.api.model
         self.temperature = cfg.api.temperature
@@ -50,7 +53,14 @@ class LLMClient:
         )
 
     def _base_meta(self, status: str) -> Dict[str, Any]:
-        """Create a fresh metadata dict so callers can extend safely."""
+        """Create a fresh metadata dict so callers can extend safely.
+
+        Args:
+            status: Initial status string (e.g., "success", "error", "skipped").
+
+        Returns:
+            Baseline metadata dictionary with zeroed token counts and timestamps.
+        """
         return {
             "prompt_tokens": 0,
             "completion_tokens": 0,
@@ -66,9 +76,13 @@ class LLMClient:
         }
 
     def _call_api(self, messages: List[Dict[str, str]]) -> ChatCompletion:
-        """
-        Performs the actual API call. This method is wrapped by the retrier.
-        Returns the full ChatCompletion object to access usage stats.
+        """Perform the raw chat-completion call and return the OpenAI response.
+
+        Args:
+            messages: Conversation payload consisting of system/user/assistant turns.
+
+        Returns:
+            ``ChatCompletion`` object from the OpenAI SDK including usage stats.
         """
         return self.client.chat.completions.create(
             model=self.model,
@@ -78,7 +92,15 @@ class LLMClient:
         )
 
     def _format_user_message(self, report_text: str, labels: List[str]) -> str:
-        """Create the user-visible text that lists the report and requested labels."""
+        """Create the user-visible text that lists the report and requested labels.
+
+        Args:
+            report_text: Radiology report snippet to embed in the prompt.
+            labels: Sequence of label names to enumerate for the LLM.
+
+        Returns:
+            A formatted string describing the report and desired findings list.
+        """
         label_list = labels or self.target_labels
         label_lines = "\n".join(f"- {label}" for label in label_list)
         return (
@@ -88,6 +110,14 @@ class LLMClient:
         )
 
     def _resolve_active_labels(self, labels_override: Sequence[str] | None) -> List[str]:
+        """Return the sanitized label list for the current request.
+
+        Args:
+            labels_override: Optional single label or iterable overriding defaults.
+
+        Returns:
+            A non-empty list of labels drawn from either the override or defaults.
+        """
         if labels_override:
             if isinstance(labels_override, str):
                 candidate_source = [labels_override]
@@ -99,17 +129,16 @@ class LLMClient:
         return list(self.target_labels)
 
     def get_labels(self, report_text: str, labels_override: Sequence[str] | None = None) -> Tuple[Dict[str, int], Dict[str, Any]]:
-        """
-        Extracts binary labels from a single radiology report.
-        
+        """Extract binary labels and metadata for a single radiology report.
+
         Args:
-            report_text: The raw text of the radiology report.
-            labels_override: Optional subset of labels to request in this prompt.
-            
+            report_text: Raw report text that should be labeled.
+            labels_override: Optional subset of labels; defaults to all configured labels.
+
         Returns:
-            A tuple containing:
-            1. Dictionary mapping label names to 0 or 1.
-            2. Metadata dictionary with token usage, latency, status, and error details.
+            Tuple where the first element is ``{label: 0|1}`` predictions and the
+            second element is a metadata dictionary containing token usage, latency,
+            request identifiers, and status/error information.
         """
         active_labels = self._resolve_active_labels(labels_override)
         # Default metadata for failures/skips

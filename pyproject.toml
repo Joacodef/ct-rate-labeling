@@ -11,6 +11,13 @@ dependencies = [
     "openai",         # For LLM API interaction
     "tenacity",       # For robust API retry logic
     "python-dotenv",  # For loading environment variables from .env
+    "omegaconf",      # For structured configs shared by scripts and tests
+    "tqdm",           # For progress bars in labeling/evaluation scripts
+]
+
+[project.optional-dependencies]
+tests = [
+    "pytest",         # Test runner used in CI and local development
 ]
 
 [build-system]

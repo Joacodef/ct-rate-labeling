@@ -13,8 +13,17 @@ def estimate_cost(
     pricing_table: dict,
     precision: int = 8
 ) -> float:
-    """
-    Estimate USD cost using pricing data supplied via config.
+    """Estimate the USD cost of a request using the provided pricing table.
+
+    Args:
+        model_name: Name/version reported by the API (used for table lookup).
+        prompt_tokens: Number of input tokens sent to the model.
+        completion_tokens: Number of output tokens returned by the model.
+        pricing_table: Mapping of model identifiers to per-million token costs.
+        precision: Decimal places to round the resulting cost to.
+
+    Returns:
+        Rounded cost estimate in USD; defaults to 0 if pricing data is missing.
     """
     if not pricing_table:
         if model_name not in UNPRICED_MODELS_WARNED:
