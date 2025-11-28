@@ -4,6 +4,7 @@ import sys
 import os
 import json
 from omegaconf import OmegaConf
+from openai import RateLimitError
 
 # Add the src directory to the system path to allow imports
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../src')))
@@ -220,6 +221,52 @@ class TestLLMClient(unittest.TestCase):
         messages = mock_instance.chat.completions.create.call_args[1]["messages"]
         # With examples disabled, only system + user messages should be sent
         self.assertEqual(len(messages), 2)
+
+    @patch('ctr_labeling.llm_client.OpenAI')
+    def test_get_labels_retries_rate_limit(self, mock_openai):
+        mock_openai.return_value  # Ensure constructor succeeds
+        client = LLMClient(self.cfg)
+
+        success_response = MagicMock()
+        success_response.choices[0].message.content = json.dumps({
+            "Label_A": 1,
+            "Label_B": 0
+        })
+        success_response.usage.prompt_tokens = 60
+        success_response.usage.completion_tokens = 10
+        success_response.usage.total_tokens = 70
+        success_response.id = "retry_success"
+        success_response.model = "gpt-test"
+
+        fake_response = MagicMock()
+        fake_response.request = MagicMock()
+        responses = [RateLimitError(message="rate limit", response=fake_response, body=None), success_response]
+
+        def fake_call(_messages):
+            result = responses.pop(0)
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+        client._call_api = MagicMock(side_effect=fake_call)
+
+        def fake_retrier(func, messages):
+            while True:
+                try:
+                    return func(messages)
+                except RateLimitError:
+                    continue
+
+        client.retrier = fake_retrier
+
+        labels, meta = client.get_labels("Report text needing retry")
+
+        self.assertEqual(labels, {"Label_A": 1, "Label_B": 0})
+        self.assertEqual(meta["retry_count"], 2)
+        self.assertEqual(meta["status"], "success")
+        self.assertEqual(meta["prompt_tokens"], 60)
+        self.assertEqual(meta["completion_tokens"], 10)
+        self.assertEqual(meta["total_tokens"], 70)
 
 if __name__ == '__main__':
     unittest.main()
