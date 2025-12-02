@@ -55,6 +55,8 @@ All runtime parameters are managed via [Hydra](https://hydra.cc/).
     export OPENAI_API_KEY="sk-..."
     ```
     The config automatically reads this via `${oc.env:OPENAI_API_KEY}`.
+* **Reasoning Effort**: `api.reasoning_effort` lets you request `low`, `medium`, or `high` reasoning depth (defaults to `low`).
+* **Completion Token Cap**: `api.max_completion_tokens` limits the assistant output to prevent runaway generations (defaults to `1024`).
 
 ### 2. Labels and Prompts (`configs/prompt/*.yaml`)
 * **Prompt Selection**: Choose the prompt template by passing `prompt=<file_stem>` to Hydra (e.g., `prompt=zero-shot_multi`, `prompt=zero-shot_single`, `prompt=3-shot_multi_v1`). Each option maps to a YAML file under `configs/prompt/`.

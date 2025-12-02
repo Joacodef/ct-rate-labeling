@@ -194,6 +194,32 @@ class TestLLMClient(unittest.TestCase):
         self.assertNotIn("- Label_A", user_message)
 
     @patch('ctr_labeling.llm_client.OpenAI')
+    def test_reasoning_effort_and_max_tokens_configurable(self, mock_openai):
+        self.cfg.api.reasoning_effort = "medium"
+        self.cfg.api.max_completion_tokens = 256
+
+        mock_response = MagicMock()
+        mock_response.choices[0].message.content = json.dumps({
+            "Label_A": 1,
+            "Label_B": 0
+        })
+        mock_response.usage.prompt_tokens = 10
+        mock_response.usage.completion_tokens = 5
+        mock_response.usage.total_tokens = 15
+        mock_response.id = "resp_limits"
+        mock_response.model = "gpt-test"
+
+        mock_instance = mock_openai.return_value
+        mock_instance.chat.completions.create.return_value = mock_response
+
+        client = LLMClient(self.cfg)
+        client.get_labels("Limited report")
+
+        call_kwargs = mock_instance.chat.completions.create.call_args[1]
+        self.assertEqual(call_kwargs["reasoning_effort"], "medium")
+        self.assertEqual(call_kwargs["max_completion_tokens"], 256)
+
+    @patch('ctr_labeling.llm_client.OpenAI')
     def test_examples_can_be_disabled(self, mock_openai):
         self.cfg.prompt.examples = [{
             "report": "Example report",

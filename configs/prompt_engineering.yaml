@@ -4,7 +4,7 @@ defaults:
 
 hydra:
   run:
-    dir: outputs/${now:%Y-%m-%d}/zero-shot_multi_gpt-5-nano
+    dir: outputs/${now:%Y-%m-%d}/gpt-5-nano_zero-shot_multi_1
 
 io:
   reports_csv: "data/tiny_tuning_set.csv" # Required input CSV with VolumeName + report_text columns
@@ -13,6 +13,8 @@ io:
 api:
   model: "gpt-5-nano"
   temperature: 1
+  reasoning_effort: "low"
+  max_completion_tokens: 1024
   max_retries: 5
   cost_precision: 8
   pricing:

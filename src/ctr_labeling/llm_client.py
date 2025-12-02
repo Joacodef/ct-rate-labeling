@@ -33,6 +33,8 @@ class LLMClient:
         self.client = OpenAI(api_key=cfg.api.api_key)
         self.model = cfg.api.model
         self.temperature = cfg.api.temperature
+        self.reasoning_effort = cfg.api.get("reasoning_effort", "low")
+        self.max_completion_tokens = cfg.api.get("max_completion_tokens", None)
         self.system_prompt = cfg.prompt.system_prompt
         self.target_labels = list(cfg.prompt.labels)
         self.examples_enabled = bool(cfg.prompt.get("examples_enabled", True))
@@ -84,12 +86,18 @@ class LLMClient:
         Returns:
             ``ChatCompletion`` object from the OpenAI SDK including usage stats.
         """
-        return self.client.chat.completions.create(
-            model=self.model,
-            messages=messages,
-            temperature=self.temperature,
-            response_format={"type": "json_object"}
-        )
+        request_kwargs: Dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": self.temperature,
+            "response_format": {"type": "json_object"}
+        }
+        if self.reasoning_effort:
+            request_kwargs["reasoning_effort"] = self.reasoning_effort
+        if self.max_completion_tokens is not None:
+            request_kwargs["max_completion_tokens"] = self.max_completion_tokens
+
+        return self.client.chat.completions.create(**request_kwargs)
 
     def _format_user_message(self, report_text: str, labels: List[str]) -> str:
         """Create the user-visible text that lists the report and requested labels.
