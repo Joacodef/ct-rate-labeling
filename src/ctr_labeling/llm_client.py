@@ -104,7 +104,7 @@ class LLMClient:
         label_list = labels or self.target_labels
         label_lines = "\n".join(f"- {label}" for label in label_list)
         return (
-            f"Report:\n{report_text}\n\n"
+            f"Report:\n\"\"\"\n{report_text}\n\"\"\"\n\n"
             f"Target findings:\n{label_lines}\n"
             "Return a JSON object that only contains these findings as keys with 0/1 values."
         )
@@ -155,13 +155,25 @@ class LLMClient:
         # Inject few-shot examples if configured
         for example in self.examples:
             ex_report = example.get("report", "")
-            ex_labels = self._resolve_active_labels(example.get("labels"))
-            # Ensure output is formatted as a JSON string
-            ex_output = example.get("output", "")
-            if not isinstance(ex_output, str):
-                ex_output = json.dumps(ex_output)
+            
+            # Parse and filter example output to match the requested labels
+            raw_output = example.get("output", {})
+            if isinstance(raw_output, str):
+                try:
+                    raw_output = json.loads(raw_output)
+                except json.JSONDecodeError:
+                    pass  # Keep as string if not valid JSON
 
-            messages.append({"role": "user", "content": self._format_user_message(ex_report, ex_labels)})
+            if isinstance(raw_output, dict):
+                # Filter keys to only those in active_labels
+                filtered_output = {k: v for k, v in raw_output.items() if k in active_labels}
+                ex_output = json.dumps(filtered_output)
+            else:
+                # Fallback for non-dict outputs
+                ex_output = str(raw_output)
+
+            # The example prompt should request exactly the same labels we are currently asking for
+            messages.append({"role": "user", "content": self._format_user_message(ex_report, active_labels)})
             messages.append({"role": "assistant", "content": ex_output})
 
         # Append the actual target report

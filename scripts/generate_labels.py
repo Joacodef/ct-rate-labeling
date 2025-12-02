@@ -201,6 +201,10 @@ def main(cfg: DictConfig) -> None:
         log.error(f"Failed to load CSV: {e}")
         sys.exit(1)
 
+    # Normalize column names (handle lowercase volumename)
+    if "volumename" in df.columns and "VolumeName" not in df.columns:
+        df.rename(columns={"volumename": "VolumeName"}, inplace=True)
+
     required_columns = ["VolumeName", "report_text"]
     if not all(col in df.columns for col in required_columns):
         log.error(f"Input CSV must contain columns: {required_columns}. Found: {df.columns.tolist()}")
