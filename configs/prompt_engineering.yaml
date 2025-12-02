@@ -4,7 +4,7 @@ defaults:
 
 hydra:
   run:
-    dir: outputs/${now:%Y-%m-%d}/gpt-5-nano_zero-shot_multi_1
+    dir: outputs/${now:%Y-%m-%d}/gpt-5-nano_zero-shot_multi_3
 
 io:
   reports_csv: "data/tiny_tuning_set.csv" # Required input CSV with VolumeName + report_text columns
