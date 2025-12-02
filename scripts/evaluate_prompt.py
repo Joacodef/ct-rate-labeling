@@ -635,7 +635,10 @@ def main(cfg: DictConfig) -> None:
             "total_estimated_cost_usd": round(total_cost, 6),
             "average_latency_seconds": round(avg_latency, 4),
             "total_reports": len(df),
-            "model_version": cfg.api.model
+            "model_version": cfg.api.model,
+            "macro_f1": macro_avg["f1"],
+            "macro_precision": macro_avg["precision"],
+            "macro_recall": macro_avg["recall"]
         }, f, indent=4)
 
     # 7. Print Summary to Console
