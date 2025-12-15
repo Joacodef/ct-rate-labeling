@@ -37,10 +37,10 @@ else:
     sys.argv = [sys.argv[0]] + remaining
 # If running locally without installation, fallback to adding src to path.
 try:
-    from ctr_labeling import LLMClient, estimate_cost
+    from ctr_labeling import LLMClient, estimate_cost, safe_cfg_to_yaml
 except ImportError:
     sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../src")))
-    from ctr_labeling import LLMClient, estimate_cost
+    from ctr_labeling import LLMClient, estimate_cost, safe_cfg_to_yaml
 
 log = logging.getLogger(__name__)
 UNPRICED_MODELS_WARNED = set()
@@ -179,9 +179,9 @@ def main(cfg: DictConfig) -> None:
             resume_cfg_path,
             resume_csv_path
         )
-        log.info(f"Loaded resume configuration:\n{OmegaConf.to_yaml(cfg)}")
+        log.info("Loaded resume configuration:\n%s", safe_cfg_to_yaml(cfg))
     else:
-        log.info(f"Starting label generation with configuration:\n{OmegaConf.to_yaml(cfg)}")
+        log.info("Starting label generation with configuration:\n%s", safe_cfg_to_yaml(cfg))
 
     # 1. Validation of Input Config
     if not cfg.io.reports_csv:

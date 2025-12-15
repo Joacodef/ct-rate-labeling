@@ -30,7 +30,18 @@ class LLMClient:
             cfg: Hydra/OMEGACONF configuration supplying API credentials, model
                 metadata, prompt text, labels, and retry behavior.
         """
-        self.client = OpenAI(api_key=cfg.api.api_key)
+        api_key = None
+        try:
+            # Prefer explicit config if provided, otherwise fall back to OPENAI_API_KEY
+            api_key = cfg.api.get("api_key")
+        except Exception:
+            api_key = None
+
+        if isinstance(api_key, str):
+            api_key = api_key.strip() or None
+
+        # If api_key is omitted, the OpenAI SDK will read OPENAI_API_KEY from the environment.
+        self.client = OpenAI(api_key=api_key) if api_key else OpenAI()
         self.model = cfg.api.model
         self.temperature = cfg.api.temperature
         self.reasoning_effort = cfg.api.get("reasoning_effort", "low")

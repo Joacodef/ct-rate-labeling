@@ -4,7 +4,10 @@ defaults:
 
 hydra:
   run:
-    dir: outputs/${now:%Y-%m-%d}/gpt-5-nano_zero-shot_multi_3
+    dir: outputs/${now:%Y-%m-%d}/${api.model}_${hydra:runtime.choices.prompt}_${now:%H-%M-%S-%f}
+  sweep:
+    dir: outputs/${now:%Y-%m-%d}/multirun_${api.model}_${hydra:runtime.choices.prompt}_${now:%H-%M-%S-%f}
+    subdir: ${hydra.job.num}
 
 io:
   reports_csv: "data/tiny_tuning_set.csv" # Required input CSV with VolumeName + report_text columns
@@ -12,7 +15,7 @@ io:
 
 api:
   model: "gpt-5-nano"
-  temperature: 1
+  temperature: 0
   reasoning_effort: "low"
   max_completion_tokens: 1024
   max_retries: 5
@@ -46,5 +49,4 @@ api:
       input_per_million: 0.2
       cached_input_per_million: 0.05
       output_per_million: 0.8
-  # API key is read from environment variable OPENAI_API_KEY
-  api_key: ${oc.env:OPENAI_API_KEY}
+  # Authentication is read from the OPENAI_API_KEY environment variable.

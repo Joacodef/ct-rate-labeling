@@ -1,5 +1,7 @@
 import logging
-from typing import Set
+from typing import Any, Set
+
+from omegaconf import DictConfig, OmegaConf
 
 log = logging.getLogger(__name__)
 
@@ -67,3 +69,31 @@ def estimate_cost(
         )
         UNPRICED_MODELS_WARNED.add(model_base)
     return 0.0
+
+
+def safe_cfg_to_yaml(cfg: DictConfig) -> str:
+    """Serialize a config to YAML while redacting common secret fields.
+
+    This is intended for logging/debugging only.
+    """
+
+    def redact_inplace(obj: Any) -> None:
+        if isinstance(obj, dict):
+            for key, value in list(obj.items()):
+                key_lower = str(key).lower()
+                if key_lower in {"api_key", "apikey", "token", "secret", "authorization"}:
+                    obj[key] = "***REDACTED***"
+                else:
+                    redact_inplace(value)
+        elif isinstance(obj, list):
+            for item in obj:
+                redact_inplace(item)
+
+    try:
+        data = OmegaConf.to_container(cfg, resolve=False)
+    except Exception:
+        # As a last resort, fall back to stringification.
+        return str(cfg)
+
+    redact_inplace(data)
+    return OmegaConf.to_yaml(OmegaConf.create(data))

@@ -50,11 +50,11 @@ All runtime parameters are managed via [Hydra](https://hydra.cc/).
 * **Input CSV**: Update `io.reports_csv` to point to your input file. This file must contain:
     * `VolumeName`: The unique identifier for the scan (e.g., `train_1_a_1.nii.gz`).
     * `report_text`: The raw radiology report.
-* **API Key**: Set your OpenAI API key as an environment variable:
+* **API Key**: Set your OpenAI API key as an environment variable (recommended; avoids persisting secrets into Hydra run artifacts):
     ```bash
     export OPENAI_API_KEY="sk-..."
     ```
-    The config automatically reads this via `${oc.env:OPENAI_API_KEY}`.
+    The OpenAI SDK reads this automatically; the repo does not store the key in config.
 * **Reasoning Effort**: `api.reasoning_effort` lets you request `low`, `medium`, or `high` reasoning depth (defaults to `low`).
 * **Completion Token Cap**: `api.max_completion_tokens` limits the assistant output to prevent runaway generations (defaults to `1024`).
 

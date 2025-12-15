@@ -37,10 +37,10 @@ else:
 
 # Boilerplate to ensure we can import from src/ even if not installed
 try:
-    from ctr_labeling import LLMClient, estimate_cost
+    from ctr_labeling import LLMClient, estimate_cost, safe_cfg_to_yaml
 except ImportError:
     sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../src")))
-    from ctr_labeling import LLMClient, estimate_cost
+    from ctr_labeling import LLMClient, estimate_cost, safe_cfg_to_yaml
 
 log = logging.getLogger(__name__)
 
@@ -332,9 +332,9 @@ def main(cfg: DictConfig) -> None:
             resume_cfg_path,
             resume_predictions_path
         )
-        log.info(f"Loaded resume configuration:\n{OmegaConf.to_yaml(cfg)}")
+        log.info("Loaded resume configuration:\n%s", safe_cfg_to_yaml(cfg))
     else:
-        log.info(f"Starting prompt evaluation with configuration:\n{OmegaConf.to_yaml(cfg)}")
+        log.info("Starting prompt evaluation with configuration:\n%s", safe_cfg_to_yaml(cfg))
 
     # 1. Validate Input
     input_path = cfg.io.reports_csv
