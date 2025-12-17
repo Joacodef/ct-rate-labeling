@@ -100,11 +100,13 @@ class LLMClient:
         request_kwargs: Dict[str, Any] = {
             "model": self.model,
             "messages": messages,
-            "temperature": self.temperature,
             "response_format": {"type": "json_object"}
         }
         if self.reasoning_effort:
             request_kwargs["reasoning_effort"] = self.reasoning_effort
+        else:
+            request_kwargs["temperature"] = self.temperature
+
         if self.max_completion_tokens is not None:
             request_kwargs["max_completion_tokens"] = self.max_completion_tokens
 
