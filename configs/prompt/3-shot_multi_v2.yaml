@@ -1,0 +1,53 @@
+system_prompt: |
+  You are an expert radiologist. Your task is to extract the presence of specific abnormalities from a radiology report.
+  
+  Instructions:
+  1. Read the provided radiology report carefully.
+  2. For each abnormality in the requested list, determine if it is present (1) or absent (0).
+  3. Treat negation (e.g., "no evidence of...") as absent (0).
+  4. Treat uncertainty (e.g., "suggestive of...", "cannot exclude...") as present (1).
+  5. **Negative Constraints for 'Lung opacity':**
+     - Do NOT label 'Lung opacity' as present (1) if the findings are limited to "atelectasis", "nodules", "fibrotic sequela", or "scars".
+     - ONLY label 'Lung opacity' as present (1) if terms like "opacity", "consolidation", "infiltration", "ground-glass", or "pneumonia" are explicitly mentioned.
+  6. If an abnormality is not mentioned, assume it is absent (0).
+  7. Return the result ONLY as a valid JSON object where keys are the abnormality names and values are 0 or 1. Do not include any markdown formatting or explanation.
+
+# How the client should issue prompts. "multi" requests all labels at once, "single" sends one label per API call.
+mode: "multi"
+
+# Allows toggling few-shot examples without editing the list itself.
+examples_enabled: true
+
+labels:
+  #- "Medical material"
+  - "Arterial wall calcification"
+  #- "Cardiomegaly"
+  #- "Pericardial effusion"
+  #- "Coronary artery wall calcification"
+  #- "Hiatal hernia"
+  - "Lymphadenopathy"
+  #- "Emphysema"
+  #- "Atelectasis"
+  - "Lung nodule"
+  - "Lung opacity"
+  - "Pulmonary fibrotic sequela"
+  #- "Pleural effusion"
+  #- "Mosaic attenuation pattern"
+  #- "Peribronchial thickening"
+  #- "Consolidation"
+  #- "Bronchiectasis"
+  #- "Interlobular septal thickening"
+
+  # Default to zero-shot (no examples)
+examples:
+  - report: |
+      Trachea and main bronchi are open. No pathological lymph node was detected in the mediastinum. The heart and mediastinal vascular structures have a natural appearance. Esophagus is within normal limits. Pleural effusion-thickening was not detected in both hemithorax. In the evaluation of both lung parenchyma; No suspicious mass, nodule or infiltration was detected in both lungs. In the sections passing through the upper part of the abdomen, the bilateral adrenal glands appear natural. There are hypodense lesions in soft tissue density in the liver. It is recommended to be evaluated in elective conditions after infection. No obvious pathology was detected in bone structures. No signs of infection were detected in the lungs. However, it should be known that CT may be false negative in the first few days. There are hypodense lesions in soft tissue density in the liver. It is recommended to be evaluated in elective conditions after infection.
+    output: {"Arterial wall calcification": 0, "Lymphadenopathy": 0, "Lung nodule": 0, "Lung opacity": 0, "Pulmonary fibrotic sequela": 0}
+
+  - report: |
+      It was compared with the CT examination of the case dated 22.03.2022. Trachea and lumen of both main bronchi are open. No occlusive pathology was detected in the trachea and lumen of both main bronchi. Mediastinal structures were evaluated as suboptimal since the examination was unenhanced. As far as can be seen; Calibration of mediastinal major vascular structures is natural. Heart contour size is natural. Pericardial thickening-effusion was not detected. Calcific atherosclerotic changes were observed in the thoracic aorta and coronary artery walls. Thoracic esophagus calibration was normal and no significant pathological wall thickening was detected. No lymph node was detected in mediastinal and bilateral hilar pathological size and appearance. Soft tissue densities compatible with bilateral gynecomastia were observed. When examined in the lung parenchyma window; Emphysematous changes were observed in both lungs. According to the previous examination, a stable subsegmentary atelectasis area was observed in the lower lobe of the right lung. According to the previous examination, several nonspecific parenchymal nodules were observed in both lungs. Bilateral pleural thickening-effusion was not detected. Liver right lobe transplantation was performed in the upper abdominal sections included in the study area. In the left subdiaphragmatic region, the solidified lesion containing cystic areas observed in the previous examination decreased in size. No cystic areas were detected in the current examination. Liver parenchyma density is diffusely decreased in line with fatty deposits. No lytic-destructive lesion was detected in bone structures. • Operated HCC at follow-up. • Emphysematous changes in both lungs. • Stable nonspecific parenchymal nodules of millimeter size in both lungs. • Subsegmental atelectasis in the lower lobe of the right lung. • Nonspecific solidified lesion with loss of cystic content in the left subdiaphragmatic area. • Hepatosteatosis.
+    output: {"Arterial wall calcification": 1, "Lymphadenopathy": 0, "Lung nodule": 1, "Lung opacity": 0, "Pulmonary fibrotic sequela": 0}
+
+  - report: |
+      Trachea, both main bronchi are open. Mediastinal main vascular structures, heart contour, size are normal. Pericardial effusion-thickening was not observed. Calcific atheroma plaque is observed in the aortic arch. Thoracic esophagus calibration was normal and no significant pathological wall thickening was detected. There are small lymph nodes with a short axis measuring up to 5 mm in the mediastinum. When examined in the lung parenchyma window; Interlobular septal thickening in both lungs, slight enlargement of the vascular structures, linear density increase in the area extending anteriorly in the right lung middle lobe, including an air bronchogram area, consolidation? It has been evaluated in its direction. Clinical laboratory correlation of findings is recommended for the onset of an infectious process. Atelectatic changes are observed in the lower lobes of both lungs. Upper abdominal organs are partially included in the study. It was evaluated as suboptimal. No gross pathology was found. There is an osteopenic appearance in the bone structures in the examination area, and degenerative changes are observed in the end plates of the vertebral corpuscles. " The consolidation area in the middle lobe of the right lung, extending from the hilar region to the anterior, containing the air bronchogram sign? atelectasis? clinical laboratory correlation and close follow-up of the finding is recommended for the onset of an infectious process." hypertrophic osteophytic tapering in endplates
+    output: {"Arterial wall calcification": 1, "Lymphadenopathy": 1, "Lung nodule": 0, "Lung opacity": 1, "Pulmonary fibrotic sequela": 0}
