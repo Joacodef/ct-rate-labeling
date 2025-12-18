@@ -88,15 +88,35 @@ class LLMClient:
             "ended_at_utc": ""
         }
 
-    def _call_api(self, messages: List[Dict[str, str]]) -> ChatCompletion:
-        """Perform the raw chat-completion call and return the OpenAI response.
+    def _call_responses_api(self, messages: List[Dict[str, str]]) -> Any:
+        """Execute request using the new v1/responses endpoint (for gpt-5-pro)."""
+        # Map 'messages' to 'input' and handle parameter renaming cleanly
+        request_kwargs = {
+            "model": self.model,
+            "input": messages,
+            "text": {"format": {"type": "json_object"}}
+        }
+        
+        # Map specific parameters to their new names
+        if self.reasoning_effort:
+            # gpt-5-pro only supports 'high' reasoning effort
+            effort = self.reasoning_effort
+            if effort == "low":
+                effort = "high"
+            request_kwargs["reasoning"] = {"effort": effort}
+        
+        if self.max_completion_tokens is not None:
+            request_kwargs["max_output_tokens"] = self.max_completion_tokens
 
-        Args:
-            messages: Conversation payload consisting of system/user/assistant turns.
+        # Use the SDK's native accessor for the new endpoint
+        return self.client.responses.create(**request_kwargs)
 
-        Returns:
-            ``ChatCompletion`` object from the OpenAI SDK including usage stats.
-        """
+    def _call_api(self, messages: List[Dict[str, str]]) -> Any:
+        """Dispatch the API call to the correct endpoint based on the model."""
+        if self.model == "gpt-5-pro":
+            return self._call_responses_api(messages)
+
+        # Standard Chat Completion Logic
         request_kwargs: Dict[str, Any] = {
             "model": self.model,
             "messages": messages,
@@ -111,6 +131,30 @@ class LLMClient:
             request_kwargs["max_completion_tokens"] = self.max_completion_tokens
 
         return self.client.chat.completions.create(**request_kwargs)
+
+    def _extract_response_data(self, response: Any) -> Tuple[str, Any, str, str]:
+        """Normalize response data from either ChatCompletion or Response objects.
+        
+        Returns:
+            Tuple of (content_string, usage_object, request_id, model_version)
+        """
+        # Check for the new Response object structure (gpt-5-pro)
+        if hasattr(response, "output_text"):
+            return (
+                response.output_text,
+                response.usage,
+                getattr(response, "id", "") or "",
+                getattr(response, "model", None) or self.model
+            )
+        
+        # Fallback to standard ChatCompletion structure
+        content = response.choices[0].message.content
+        return (
+            content,
+            response.usage,
+            getattr(response, "id", "") or "",
+            getattr(response, "model", None) or self.model
+        )
 
     def _format_user_message(self, report_text: str, labels: List[str]) -> str:
         """Create the user-visible text that lists the report and requested labels.
@@ -219,20 +263,19 @@ class LLMClient:
             latency = time.perf_counter() - start_time
             ended_at = datetime.utcnow().isoformat(timespec="milliseconds") + "Z"
             
-            content = response.choices[0].message.content
+            # Use helper to handle different response object types
+            content, usage, request_id, model_version = self._extract_response_data(response)
+            
             if not content:
                 raise ValueError("Empty response from LLM")
             
             # Extract usage statistics
-            usage = response.usage
             if usage:
                 prompt_tokens = usage.prompt_tokens or 0
                 completion_tokens = usage.completion_tokens or 0
                 total_tokens = getattr(usage, "total_tokens", None) or (prompt_tokens + completion_tokens)
             else:
                 prompt_tokens = completion_tokens = total_tokens = 0
-            request_id = getattr(response, "id", "") or ""
-            model_version = getattr(response, "model", None) or self.model
             meta = self._base_meta(status="success")
             meta.update({
                 "prompt_tokens": prompt_tokens,

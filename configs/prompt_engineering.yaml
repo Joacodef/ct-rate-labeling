@@ -10,13 +10,13 @@ hydra:
     subdir: ${hydra.job.num}
 
 io:
-  reports_csv: "data/tuning_set.csv" # Required input CSV with VolumeName + report_text columns
+  reports_csv: "data/tiny_tuning_set.csv" # Required input CSV with VolumeName + report_text columns
   output_csv: "labels.csv"         # Relative filename for the newly generated labels
 
 api:
-  model: "gpt-5-nano"
+  model: "gpt-5"
   temperature: 0
-  reasoning_effort: "low"
+  reasoning_effort: "medium"
   max_completion_tokens: 1024
   max_retries: 5
   cost_precision: 8
