@@ -138,7 +138,18 @@ class LLMClient:
         Returns:
             Tuple of (content_string, usage_object, request_id, model_version)
         """
-        # Check for the new Response object structure (gpt-5-pro)
+        # Prefer standard ChatCompletion structure when choices are present
+        choices = getattr(response, "choices", None)
+        if choices is not None:
+            content = choices[0].message.content
+            return (
+                content,
+                response.usage,
+                getattr(response, "id", "") or "",
+                getattr(response, "model", None) or self.model
+            )
+
+        # Fallback to the new Response object structure (gpt-5-pro)
         if hasattr(response, "output_text"):
             return (
                 response.output_text,
@@ -146,15 +157,8 @@ class LLMClient:
                 getattr(response, "id", "") or "",
                 getattr(response, "model", None) or self.model
             )
-        
-        # Fallback to standard ChatCompletion structure
-        content = response.choices[0].message.content
-        return (
-            content,
-            response.usage,
-            getattr(response, "id", "") or "",
-            getattr(response, "model", None) or self.model
-        )
+
+        raise ValueError("Unsupported response object structure.")
 
     def _format_user_message(self, report_text: str, labels: List[str]) -> str:
         """Create the user-visible text that lists the report and requested labels.

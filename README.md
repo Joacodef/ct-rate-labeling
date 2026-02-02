@@ -60,7 +60,7 @@ All runtime parameters are managed via [Hydra](https://hydra.cc/).
 
 ### 2. Labels and Prompts (`configs/prompt/*.yaml`)
 * **Prompt Selection**: Choose the prompt template by passing `prompt=<file_stem>` to Hydra (e.g., `prompt=zero-shot_multi`, `prompt=zero-shot_single`, `prompt=3-shot_multi_v1`). Each option maps to a YAML file under `configs/prompt/`.
-* **Target Labels**: The list of abnormalities to extract lives in `prompt.labels` inside the selected YAML file.
+* **Target Labels**: The list of abnormalities to extract lives in the top-level `labels` field inside the selected YAML file.
     * **Crucial**: These names must exactly match the `training.target_labels` in the downstream `ct-rate-feature-benchmarks` project.
 * **System Prompt**: Adjust the `system_prompt` field within the chosen file to refine LLM instructions (handling uncertainty, negation, etc.).
 
@@ -68,12 +68,20 @@ All runtime parameters are managed via [Hydra](https://hydra.cc/).
 
 This repository employs an iterative approach to prompt tuning. The goal is to maximize classification performance (F1 Score) while minimizing inference costs before processing the full dataset.
 
+**Note:** Input CSVs are expected to include a `VolumeName` column. Scripts normalize the column name case-insensitively to support legacy files.
+
 ### 1. Data Strategy
 We split the validation process into two stages to balance speed and statistical significance:
 
 * **Fast Loop (`data/tiny_tuning_set.csv`)**: A small, curated set (30–50 reports) used for rapid prototyping. Contains borderline cases and difficult negatives.
 * **Validation Set (`data/tuning_set.csv`)**: A larger set (~600 reports) used for final confirmation of metrics.
 * **Production Set**: The full dataset (e.g., `data/all_reports.csv`) is processed only after the configuration is frozen.
+
+To regenerate the Fast Loop set with a specific size while preserving label prevalence, use:
+```bash
+python scripts/make_tiny_tuning_set.py --n 100 --prompt configs/prompt/3-shot_multi_v2.yaml
+```
+This samples from `data/tuning_set.csv`, writes `data/tiny_tuning_set.csv`, and prints input vs. output label prevalence (%).
 
 ### 2. Experimental Workflow
 We use `scripts/evaluate_prompt.py` to compare different models, prompting strategies, and modes.

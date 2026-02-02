@@ -246,9 +246,13 @@ def load_resume_data(path: str) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Li
         log.error("Failed to load resume CSV '%s': %s", path, exc)
         return {}, {}
 
-    if "VolumeName" not in resume_df.columns:
+    try:
+        volume_col = get_case_insensitive_column(resume_df, "VolumeName")
+    except KeyError:
         log.warning("Resume CSV '%s' lacks VolumeName column; ignoring resume request.", path)
         return {}, {}
+    if volume_col != "VolumeName":
+        resume_df.rename(columns={volume_col: "VolumeName"}, inplace=True)
 
     resume_df = resume_df.convert_dtypes()
     by_volume: Dict[str, Dict[str, Any]] = {}

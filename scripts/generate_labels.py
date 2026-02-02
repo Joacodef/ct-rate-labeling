@@ -69,6 +69,29 @@ def _safe_number(value, default=0.0):
         return default
 
 
+def get_case_insensitive_column(df: pd.DataFrame, target_name: str) -> str:
+    """Return the concrete column name matching ``target_name`` regardless of case."""
+    matches = [col for col in df.columns if col.lower() == target_name.lower()]
+    if not matches:
+        raise KeyError(f"Column '{target_name}' not found (case-insensitive search).")
+    return matches[0]
+
+
+def normalize_volume_column(df: pd.DataFrame, context: str) -> bool:
+    """Normalize the case of the VolumeName column in-place.
+
+    Returns True when VolumeName exists (after normalization), False otherwise.
+    """
+    try:
+        volume_col = get_case_insensitive_column(df, "VolumeName")
+    except KeyError:
+        log.warning("%s lacks VolumeName column; skipping.", context)
+        return False
+    if volume_col != "VolumeName":
+        df.rename(columns={volume_col: "VolumeName"}, inplace=True)
+    return True
+
+
 def load_resume_data(path: str) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, List[Dict[str, Any]]]]:
     """Load a prior labels CSV so labeling can resume without duplicate API calls.
 
@@ -91,7 +114,7 @@ def load_resume_data(path: str) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Li
         log.error("Failed to load resume CSV '%s': %s", path, exc)
         return {}, {}
 
-    if "VolumeName" not in resume_df.columns:
+    if not normalize_volume_column(resume_df, f"Resume CSV '{path}'"):
         log.warning("Resume CSV '%s' lacks VolumeName column; ignoring resume request.", path)
         return {}, {}
 
@@ -201,9 +224,7 @@ def main(cfg: DictConfig) -> None:
         log.error(f"Failed to load CSV: {e}")
         sys.exit(1)
 
-    # Normalize column names (handle lowercase volumename)
-    if "volumename" in df.columns and "VolumeName" not in df.columns:
-        df.rename(columns={"volumename": "VolumeName"}, inplace=True)
+    normalize_volume_column(df, f"Input CSV '{input_path}'")
 
     required_columns = ["VolumeName", "report_text"]
     if not all(col in df.columns for col in required_columns):
