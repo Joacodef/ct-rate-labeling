@@ -1,10 +1,9 @@
-# Prompt Engineering Log
+# Prompt Engineering Log V1 (tiny tuning set with N=28)
 
 ## Dataset Definitions & Lineage
 * **Tiny Tuning Set (`data/tiny_tuning_set.csv`)**: 
     * **Size:** N=28 reports.
     * **Origin:** Subset of the larger Tuning Set (first 28 rows).
-    * **Characteristics:** Observed to contain a higher density of "hard" or ambiguous cases compared to the general population. Used for rapid iteration (Steps 1-5, 7).
 * **Tuning / Validation Set (`data/tuning_set.csv`)**: 
     * **Size:** N=615 reports.
     * **Origin:** Derived from the `test_manual_train` partition of the original CT-RATE dataset, with duplicate reports removed to ensure unique validation.

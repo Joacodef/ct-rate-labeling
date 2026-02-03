@@ -1,6 +1,8 @@
 import json
 import logging
 import time
+import hashlib
+from pathlib import Path
 from datetime import datetime
 from typing import Any, Dict, List, Sequence, Tuple
 
@@ -20,6 +22,10 @@ from .parsing import validate_response, clean_and_parse_json
 
 # Configure logger for this module
 log = logging.getLogger(__name__)
+
+
+class EmptyResponseError(Exception):
+    """Raised when the LLM returns an empty response body."""
 
 class LLMClient:
     """High-level wrapper around the OpenAI Chat API for labeling radiology reports."""
@@ -45,10 +51,13 @@ class LLMClient:
         self.model = cfg.api.model
         self.temperature = cfg.api.temperature
         self.reasoning_effort = cfg.api.get("reasoning_effort", "low")
-        self.max_completion_tokens = cfg.api.get("max_completion_tokens", None)
+        self.max_completion_tokens = cfg.api.get("max_completion_tokens", 256)
         self.system_prompt = cfg.prompt.system_prompt
         self.target_labels = list(cfg.prompt.labels)
         self.examples_enabled = bool(cfg.prompt.get("examples_enabled", True))
+        self.log_requests = bool(cfg.api.get("log_requests", False))
+        self.log_requests_include_text = bool(cfg.api.get("log_requests_include_text", False))
+        self.log_path = cfg.api.get("log_path", "")
         raw_examples = cfg.prompt.get("examples", [])
         # Load optional few-shot examples; default to empty list if not present
         if self.examples_enabled and raw_examples:
@@ -58,12 +67,68 @@ class LLMClient:
         
         # Configure the retry strategy dynamically based on config
         self.retrier = Retrying(
-            retry=retry_if_exception_type((RateLimitError, APIConnectionError, APIError)),
-            wait=wait_exponential(multiplier=1, min=4, max=60),
+            retry=retry_if_exception_type((RateLimitError, APIConnectionError, APIError, EmptyResponseError)),
+            wait=wait_exponential(multiplier=1, min=1, max=4),
             stop=stop_after_attempt(cfg.api.max_retries),
             before_sleep=before_sleep_log(log, logging.WARNING),
             reraise=True
         )
+
+    def _append_debug_log(self, payload: Dict[str, Any]) -> None:
+        if not self.log_requests:
+            return
+        try:
+            if self.log_path:
+                log_file = Path(self.log_path)
+                if log_file.parent:
+                    log_file.parent.mkdir(parents=True, exist_ok=True)
+                with log_file.open("a", encoding="utf-8") as handle:
+                    handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
+            else:
+                log.info("LLM call debug: %s", payload)
+        except Exception:
+            log.exception("Failed to write debug log payload.")
+
+    def _build_request_log(self, report_text: str, active_labels: List[str], messages: List[Dict[str, str]]) -> Dict[str, Any]:
+        report_hash = hashlib.sha256(str(report_text).encode("utf-8")).hexdigest()
+        payload = {
+            "event": "request",
+            "timestamp_utc": datetime.utcnow().isoformat(timespec="milliseconds") + "Z",
+            "model": self.model,
+            "labels": active_labels,
+            "report_hash": report_hash,
+            "messages_count": len(messages),
+        }
+        if self.log_requests_include_text:
+            payload["messages"] = messages
+        return payload
+
+    def _build_response_log(
+        self,
+        request_id: str,
+        model_version: str,
+        content: str,
+        meta: Dict[str, Any],
+        response_meta: Dict[str, Any] | None = None
+    ) -> Dict[str, Any]:
+        response_meta = response_meta or {}
+        payload = {
+            "event": "response",
+            "timestamp_utc": datetime.utcnow().isoformat(timespec="milliseconds") + "Z",
+            "request_id": request_id,
+            "model_version": model_version,
+            "content_length": len(content) if content is not None else 0,
+            "finish_reason": response_meta.get("finish_reason", ""),
+            "tool_calls_present": response_meta.get("tool_calls_present", False),
+            "status": meta.get("status", ""),
+            "error_message": meta.get("error_message", ""),
+            "prompt_tokens": meta.get("prompt_tokens", 0),
+            "completion_tokens": meta.get("completion_tokens", 0),
+            "total_tokens": meta.get("total_tokens", 0),
+        }
+        if self.log_requests_include_text:
+            payload["content"] = content
+        return payload
 
     def _base_meta(self, status: str) -> Dict[str, Any]:
         """Create a fresh metadata dict so callers can extend safely.
@@ -160,6 +225,21 @@ class LLMClient:
 
         raise ValueError("Unsupported response object structure.")
 
+    def _extract_response_meta(self, response: Any) -> Dict[str, Any]:
+        """Extract finish reason or tool-call indicators for debugging."""
+        meta: Dict[str, Any] = {}
+        choices = getattr(response, "choices", None)
+        if choices is not None:
+            first_choice = choices[0]
+            meta["finish_reason"] = getattr(first_choice, "finish_reason", "") or ""
+            tool_calls = getattr(getattr(first_choice, "message", None), "tool_calls", None)
+            meta["tool_calls_present"] = bool(tool_calls)
+            return meta
+
+        meta["finish_reason"] = getattr(response, "finish_reason", "") or ""
+        meta["tool_calls_present"] = False
+        return meta
+
     def _format_user_message(self, report_text: str, labels: List[str]) -> str:
         """Create the user-visible text that lists the report and requested labels.
 
@@ -247,6 +327,7 @@ class LLMClient:
 
         # Append the actual target report
         messages.append({"role": "user", "content": self._format_user_message(report_text, active_labels)})
+        self._append_debug_log(self._build_request_log(report_text, active_labels, messages))
 
         prompt_tokens = 0
         completion_tokens = 0
@@ -256,22 +337,23 @@ class LLMClient:
         start_time = time.perf_counter()
         started_at = datetime.utcnow().isoformat(timespec="milliseconds") + "Z"
         attempt_counter = {"count": 0}
+        last_response_meta: Dict[str, Any] = {}
 
-        def tracked_call(call_messages: List[Dict[str, str]]) -> ChatCompletion:
+        def tracked_call(call_messages: List[Dict[str, str]]) -> Tuple[str, Any, str, str, Dict[str, Any]]:
             attempt_counter["count"] += 1
-            return self._call_api(call_messages)
+            response = self._call_api(call_messages)
+            response_meta = self._extract_response_meta(response)
+            last_response_meta.update(response_meta)
+            content, usage, req_id, model_ver = self._extract_response_data(response)
+            if not content or not str(content).strip():
+                raise EmptyResponseError("Empty response from LLM")
+            return content, usage, req_id, model_ver, response_meta
 
         try:
             # Execute the API call with the configured retry policy
-            response = self.retrier(tracked_call, messages)
+            content, usage, request_id, model_version, response_meta = self.retrier(tracked_call, messages)
             latency = time.perf_counter() - start_time
             ended_at = datetime.utcnow().isoformat(timespec="milliseconds") + "Z"
-            
-            # Use helper to handle different response object types
-            content, usage, request_id, model_version = self._extract_response_data(response)
-            
-            if not content:
-                raise ValueError("Empty response from LLM")
             
             # Extract usage statistics
             if usage:
@@ -297,6 +379,7 @@ class LLMClient:
             parsed_json = clean_and_parse_json(content)
             labels = validate_response(parsed_json, active_labels)
             
+            self._append_debug_log(self._build_response_log(request_id, model_version, content, meta, response_meta))
             return labels, meta
             
         except json.JSONDecodeError:
@@ -316,6 +399,7 @@ class LLMClient:
                 "started_at_utc": started_at,
                 "ended_at_utc": ended_at
             })
+            self._append_debug_log(self._build_response_log(request_id, model_version, "", meta, last_response_meta))
             return empty_labels, meta
         except Exception as e:
             latency = time.perf_counter() - start_time
@@ -334,4 +418,5 @@ class LLMClient:
                 "started_at_utc": started_at,
                 "ended_at_utc": ended_at
             })
+            self._append_debug_log(self._build_response_log(request_id, model_version, "", meta, last_response_meta))
             return empty_labels, meta

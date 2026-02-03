@@ -546,7 +546,10 @@ def main(cfg: DictConfig) -> None:
         storage_row.update({f"pred_{k}": predicted_labels.get(k, 0) for k in target_labels})
 
         # Record result row
-        result_row = {"VolumeName": vol_name}
+        result_row = {
+            "VolumeName": vol_name,
+            "status": meta.get("status", "")
+        }
         result_row.update({f"pred_{k}": v for k, v in predicted_labels.items()})
         
         # Keep original truths for easier dataframe construction
@@ -595,6 +598,16 @@ def main(cfg: DictConfig) -> None:
 
     # 5. Calculate Metrics
     results_df = pd.DataFrame(predictions)
+    status_series = results_df.get("status")
+    if status_series is not None:
+        status_series = status_series.fillna("")
+        success_count = int((status_series == "success").sum())
+        skipped_count = int((status_series == "skipped").sum())
+        error_count = int((status_series == "error").sum())
+    else:
+        success_count = skipped_count = error_count = 0
+    total_count = len(results_df)
+    coverage_pct = round((success_count / total_count) * 100.0, 2) if total_count else 0.0
     metric_rows = []
     
     log.info("Calculating metrics...")
@@ -639,6 +652,10 @@ def main(cfg: DictConfig) -> None:
             "total_estimated_cost_usd": round(total_cost, 6),
             "average_latency_seconds": round(avg_latency, 4),
             "total_reports": len(df),
+            "labeled_reports": success_count,
+            "skipped_reports": skipped_count,
+            "error_reports": error_count,
+            "coverage_percent": coverage_pct,
             "model_version": cfg.api.model,
             "macro_f1": macro_avg["f1"],
             "macro_precision": macro_avg["precision"],
@@ -653,6 +670,9 @@ def main(cfg: DictConfig) -> None:
     print("="*60)
     print(f"Total Estimated Cost:   ${total_cost:.4f}")
     print(f"Avg Latency per Report: {avg_latency:.2f}s")
+    print(f"Coverage (labeled/total): {success_count}/{total_count} ({coverage_pct:.2f}%)")
+    if skipped_count or error_count:
+        print(f"Skipped: {skipped_count} | Errors: {error_count}")
     print("-" * 60)
     print(f"Metrics saved to:       {metrics_path}")
     print(f"Discrepancies saved to: {discrepancies_path}")

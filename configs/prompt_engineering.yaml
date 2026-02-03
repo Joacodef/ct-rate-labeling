@@ -16,9 +16,12 @@ io:
 api:
   model: "gpt-5"
   temperature: 0
-  reasoning_effort: "medium"
-  max_completion_tokens: 1024
+  reasoning_effort: "low"
+  max_completion_tokens: 4096
   max_retries: 5
+  log_requests: true
+  log_path: "${hydra:run.dir}/llm_calls.jsonl"
+  log_requests_include_text: true
   cost_precision: 8
   pricing:
     gpt-5-pro:
