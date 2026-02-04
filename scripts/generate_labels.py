@@ -190,9 +190,11 @@ def main(cfg: DictConfig) -> None:
             sys.exit(1)
 
         resume_dir = Path(RESUME_RUN_DIR)
-        resume_cfg_path = resume_dir / ".hydra" / "config.yaml"
+        resume_cfg_path = resume_dir / "run_config.yaml"
         if not resume_cfg_path.exists():
-            log.error("Resume directory %s does not contain .hydra/config.yaml", resume_dir)
+            resume_cfg_path = resume_dir / ".hydra" / "config.yaml"
+        if not resume_cfg_path.exists():
+            log.error("Resume directory %s does not contain a saved config file", resume_dir)
             sys.exit(1)
 
         cfg = OmegaConf.load(str(resume_cfg_path))
@@ -268,6 +270,12 @@ def main(cfg: DictConfig) -> None:
         output_dir = RESUME_RUN_DIR
     else:
         output_dir = HydraConfig.get().runtime.output_dir
+        try:
+            saved_cfg_path = os.path.join(output_dir, "run_config.yaml")
+            OmegaConf.save(cfg, saved_cfg_path)
+            log.info("Saved run configuration to %s", saved_cfg_path)
+        except Exception as exc:
+            log.warning("Failed to save run configuration: %s", exc)
 
     output_rel = cfg.io.output_csv
     if os.path.isabs(output_rel):
