@@ -1,7 +1,7 @@
 import argparse
 import glob
 from pathlib import Path
-from typing import List
+from typing import Iterable, List
 
 import pandas as pd
 
@@ -17,40 +17,56 @@ def load_metrics(files: List[str]) -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True)
 
 
+def _collect_input_files(glob_pattern: str | None, files: Iterable[str]) -> List[str]:
+    collected = list(files)
+    if glob_pattern:
+        collected.extend(glob.glob(glob_pattern))
+    unique_files = sorted(set(collected))
+    if not unique_files:
+        raise SystemExit("Provide at least one input file via --files and/or --glob.")
+    return unique_files
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Aggregate evaluation_metrics.csv files and add std columns.",
+        description="Aggregate metric CSV files and compute per-label mean/std.",
     )
     parser.add_argument(
         "--glob",
         dest="glob_pattern",
-        required=True,
-        help="Glob pattern for evaluation_metrics.csv files.",
+        default=None,
+        help="Optional glob pattern for metric CSV files.",
+    )
+    parser.add_argument(
+        "--files",
+        nargs="*",
+        default=[],
+        help="Optional explicit list of metric CSV files.",
     )
     parser.add_argument(
         "--output",
-        default="aggregated_metrics.csv",
-        help="Output CSV path (default: aggregated_metrics.csv).",
+        default="aggregated_metrics_mean_std.csv",
+        help="Output CSV path (default: aggregated_metrics_mean_std.csv).",
     )
 
     args = parser.parse_args()
 
-    files = sorted(glob.glob(args.glob_pattern))
+    files = _collect_input_files(args.glob_pattern, args.files)
     metrics = load_metrics(files)
 
-    numeric_cols = ["precision", "recall", "f1", "tp", "fp", "fn", "tn"]
+    numeric_cols = ["precision", "recall", "f1", "accuracy", "tp", "fp", "fn", "tn"]
     missing = [c for c in numeric_cols + ["label"] if c not in metrics.columns]
     if missing:
         raise SystemExit(f"Missing columns in input metrics: {missing}")
 
     grouped = metrics.groupby("label", as_index=False)[numeric_cols]
-    means = grouped.mean().rename(columns={c: c for c in numeric_cols})
+    means = grouped.mean().rename(columns={c: f"{c}_mean" for c in numeric_cols})
     stds = grouped.std(ddof=0).rename(columns={c: f"{c}_std" for c in numeric_cols})
 
     result = pd.merge(means, stds, on="label", how="left")
     result = result[[
         "label",
-        *numeric_cols,
+        *[f"{c}_mean" for c in numeric_cols],
         *[f"{c}_std" for c in numeric_cols],
     ]]
 
