@@ -1,10 +1,10 @@
-"""Compare labels between two CSVs for shared columns.
+"""Evaluate prediction performance between two label CSVs.
 
 Usage:
-    python scripts/compare_label_csvs.py \
+    python scripts/evaluate_prediction_performance.py \
         --left-csv data/MANUAL_LABELS.csv \
         --right-csv "outputs/Full Dataset Labeling/manual_set_labels_gpt-5-nano.csv" \
-        --output-dir "outputs/Full Dataset Labeling/compare_label_csvs"
+        --output-dir "outputs/Full Dataset Labeling/evaluate_prediction_performance"
 """
 
 from __future__ import annotations
@@ -35,6 +35,10 @@ META_COLUMNS = {
 
 
 def _strip_suffixes(value: str, suffixes: Iterable[str]) -> str:
+    """Remove the first matching suffix from a string value.
+
+    Non-string inputs are returned unchanged.
+    """
     if not isinstance(value, str):
         return value
     for suffix in suffixes:
@@ -44,6 +48,7 @@ def _strip_suffixes(value: str, suffixes: Iterable[str]) -> str:
 
 
 def _strip_reconstruction_suffix(value: str) -> str:
+    """Drop trailing reconstruction token in the form '_<number>' from an ID."""
     if not isinstance(value, str):
         return value
     head, sep, tail = value.rpartition("_")
@@ -53,10 +58,12 @@ def _strip_reconstruction_suffix(value: str) -> str:
 
 
 def _normalize_columns(df: pd.DataFrame) -> Dict[str, str]:
+    """Build a case-insensitive lookup mapping lowercase name -> original name."""
     return {col.lower(): col for col in df.columns}
 
 
 def _get_case_insensitive_column(df: pd.DataFrame, target: str) -> str:
+    """Resolve a column name from a DataFrame using case-insensitive matching."""
     lookup = _normalize_columns(df)
     key = target.lower()
     if key not in lookup:
@@ -65,6 +72,7 @@ def _get_case_insensitive_column(df: pd.DataFrame, target: str) -> str:
 
 
 def _shared_label_columns(left_df: pd.DataFrame, right_df: pd.DataFrame, exclude: Iterable[str]) -> List[str]:
+    """Return shared label columns between both DataFrames, excluding metadata columns."""
     left_cols = {c.lower(): c for c in left_df.columns}
     right_cols = {c.lower(): c for c in right_df.columns}
     exclude_set = {name.lower() for name in exclude}
@@ -78,6 +86,10 @@ def _shared_label_columns(left_df: pd.DataFrame, right_df: pd.DataFrame, exclude
 
 
 def calculate_binary_metrics(df: pd.DataFrame, true_col: str, pred_col: str) -> Dict[str, float]:
+    """Compute binary classification metrics from true and predicted columns.
+
+    Columns are coerced to integers with missing/invalid values treated as 0.
+    """
     y_true = pd.to_numeric(df[true_col], errors="coerce").fillna(0).astype(int)
     y_pred = pd.to_numeric(df[pred_col], errors="coerce").fillna(0).astype(int)
 
@@ -115,6 +127,7 @@ def _build_discrepancies(
     volume_col: str,
     labels: Iterable[Tuple[str, str, str]],
 ) -> List[Dict[str, object]]:
+    """Collect per-report mismatches for each label into a flat row list."""
     rows: List[Dict[str, object]] = []
     for label, true_col, pred_col in labels:
         y_true = pd.to_numeric(df[true_col], errors="coerce").fillna(0).astype(int)
@@ -131,6 +144,7 @@ def _build_discrepancies(
 
 
 def main() -> None:
+    """Parse arguments, align both CSVs, compute metrics, and write outputs."""
     parser = argparse.ArgumentParser(description="Compare label columns between two CSVs.")
     parser.add_argument("--left-csv", required=True, help="Path to left CSV")
     parser.add_argument("--right-csv", required=True, help="Path to right CSV")
@@ -171,7 +185,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--output-dir",
-        default="outputs/Full Dataset Labeling/compare_label_csvs",
+        default="outputs/Full Dataset Labeling/evaluate_prediction_performance",
         help="Directory to write metrics and discrepancies.",
     )
     parser.add_argument(
@@ -247,7 +261,6 @@ def main() -> None:
         raise SystemExit("No matching VolumeName values after normalization.")
 
     metric_rows = []
-    discrepancies = []
 
     total_correct = 0
     total_labels = 0

@@ -18,3 +18,5 @@ outputs/
 ~*
 
 .venv
+
+*.ps1
