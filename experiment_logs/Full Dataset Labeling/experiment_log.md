@@ -125,6 +125,5 @@ python scripts/generate_consensus_ensemble.py --csvs "outputs/Full Dataset Label
 | **Unanimity** | **0.9251** | 0.8599 | 0.8881 | 0.9354 | **High Precision:** Peaks in precision but drops significantly in recall. |
 
 ### Conclusion
-
-* **Action:** The **"Any Positive"** ensemble criteria yields the highest Macro F1 score and Accuracy against both the expert gold standard (0.9034 F1) and the RadBERT secondary verification (0.9260 F1). It successfully mitigates the false negatives (weak recall) observed in earlier single-run prompt engineering.
-* **Goal:** Select the "Any Positive" (or "Majority" if tighter precision is clinically required) consensus labels as the final, high-fidelity dataset for downstream modeling.
+* **Action:** While the **"Any Positive"** ensemble criteria mathematically yields the highest Macro F1 score (0.9034 vs. manual, 0.9260 vs. RadBERT) by recovering false negatives, the absolute gain over a single `gpt-5-nano` run is marginal (~1.5%). Furthermore, the exceptional inter-run stability (Cohen's Kappa ~0.947) proves the single-pass labels are inherently robust.
+* **Goal:** Proceed with **Run 1's single-pass labels** for training downstream visual classifiers. The slight noise reduction provided by the 3-way ensemble does not justify the 3x compute cost and pipeline complexity for the vision task. The ensemble findings remain documented here to establish the theoretical performance ceiling of the LLM labeler.
